@@ -14,7 +14,7 @@ describe("airport agent configuration", () => {
   });
 
   it("registers the calibrated blink overlay on the source canvas", () => {
-    expect(airportAgentConfig.expressionMode).toBe("full-frame");
+    expect(airportAgentConfig.expressionMode).toBe("localized-overlay");
     expect(airportAgentConfig.eyesTransform.closed).toEqual({
       x: 0,
       y: 0,
@@ -23,7 +23,15 @@ describe("airport agent configuration", () => {
     });
     expect(airportAgentConfig.overlayCalibration).toEqual({
       eyes: true,
-      mouth: false,
+      mouth: true,
+    });
+  });
+
+  it("registers the speaking overlays on the canonical source canvas", () => {
+    expect(airportAgentConfig.mouthTransform).toEqual({
+      closed: { x: 0, y: 0, scale: 1, rotation: 0 },
+      mid: { x: 0, y: 0, scale: 1, rotation: 0 },
+      open: { x: 0, y: 0, scale: 1, rotation: 0 },
     });
   });
 

@@ -34,7 +34,7 @@ export interface CharacterRigConfig {
   position: PointConfig;
   anchor: PointConfig;
   baseScale: number;
-  expressionMode: "full-frame";
+  expressionMode: "localized-overlay";
   eyesTransform: Record<EyeState, FaceOverlayTransform>;
   mouthTransform: Record<MouthState, FaceOverlayTransform>;
   overlayCalibration: {
@@ -48,7 +48,7 @@ export interface CharacterRigStatus {
   availableLayers: readonly string[];
   canBlink: boolean;
   canPreviewSpeaking: boolean;
-  expressionMode: "full-frame";
+  expressionMode: "localized-overlay";
   overlaysCalibrated: {
     eyes: boolean;
     mouth: boolean;

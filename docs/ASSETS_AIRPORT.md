@@ -41,7 +41,7 @@ public/assets/airport/character/agent-master-v2.png
 - Resolución suficiente para 1080p y 1440p.
 - Sin fondo, UI ni texto incrustado.
 
-## Prueba aprobable de ojos (v2)
+## Rig facial aprobado (v2)
 
 La prueba de parpadeo usa un único master canónico y una capa mínima derivada
 de ese mismo rostro:
@@ -49,6 +49,12 @@ de ese mismo rostro:
 ```text
 public/assets/airport/character/agent-master-v2.png
 public/assets/airport/character/eyes-closed-v2.png
+public/assets/airport/character/mouth-mid-v2.png
+public/assets/airport/character/mouth-open-v2.png
+public/assets/airport/character/expression-smile-v2.png
+public/assets/airport/character/expression-serious-v2.png
+public/assets/airport/character/expression-confused-v2.png
+public/assets/airport/character/expression-surprised-v2.png
 ```
 
 Ambos archivos tienen un canvas de `1086×1448`. La capa cerrada conserva ese
@@ -57,6 +63,10 @@ limitado a dos zonas elípticas con borde suavizado; el resto es transparente.
 El estado abierto es el propio master, no una segunda capa. El ciclo real
 muestra `eyes-closed-v2.png` durante 115 ms y vuelve al master.
 
+El estado neutral y el cuerpo también son siempre el master. Las expresiones v2
+son overlays faciales localizados; no sustituyen la imagen completa. Por eso se
+registran en modo `localized-overlay` y conservan origen, escala y canvas.
+
 El panel `DEV · SCENE` incluye una grilla de 50 px, líneas mayores cada 100 px,
 coordenadas del lienzo, control de opacidad y vista cerrada fija. La grilla sólo
 existe en desarrollo.
@@ -64,6 +74,26 @@ existe en desarrollo.
 El procedimiento de producción completo, las coordenadas del recorte, la
 máscara, los hashes y el registro para continuar con la boca están documentados
 en [CHARACTER_ASSET_METHOD.md](CHARACTER_ASSET_METHOD.md).
+
+## Ambientación combinada del fondo
+
+```text
+public/assets/airport/ambient/background-state-b-v1.png
+public/assets/airport/ambient/background-state-c-v1.png
+public/assets/airport/ambient/ambient-traveler-man-v2.png
+public/assets/airport/ambient/ambient-traveler-woman-v2.png
+```
+
+El fondo original es el estado A inmutable. B y C cambian únicamente el avance y
+la distribución de pasajeros, y se conectan mediante una disolución lenta. Las
+dos figuras v2 forman una segunda capa situada entre el fondo y el personaje.
+No caminan todavía: aparecen, permanecen quietas, desaparecen y cambian de zona
+sólo mientras su alfa es cero. Sus PNG tienen alfa real; las v1 con cuadrícula
+horneada fueron rechazadas y no deben volver a conectarse.
+
+El método, las posiciones, los tiempos, los hashes, los prompts y el camino para
+incorporar futuros pasajeros en movimiento están registrados en
+[AMBIENT_SCENE_METHOD.md](AMBIENT_SCENE_METHOD.md).
 
 ## Rig opcional por capas (legado pendiente de reemplazo)
 
@@ -83,7 +113,8 @@ public/assets/airport/character/
 ```
 
 Los archivos anteriores se conservan temporalmente para comparación, pero las
-bocas están deshabilitadas hasta reconstruirse desde el master canónico. Las
+bocas sin sufijo `-v2` están deshabilitadas. El habla usa el master como estado
+cerrado y únicamente las capas `mouth-mid-v2.png` y `mouth-open-v2.png`. Las
 nuevas capas aprobadas deben compartir exactamente:
 
 - tamaño de canvas;
@@ -106,9 +137,10 @@ declarados explícitamente en
    `AGENT ASSET MISSING`.
 
 El parpadeo se habilita únicamente si carga `eyes-closed-v2.png`. La demostración
-de speaking exige además que las bocas estén marcadas como calibradas; tener los
-archivos antiguos en disco no las habilita. El master conserva la respiración
-sutil.
+de speaking exige que carguen las dos bocas v2 y estén marcadas como calibradas;
+tener los archivos antiguos en disco no las habilita. Los estados abiertos de
+ojos y cerrado de boca son siempre el propio master. El master conserva la
+respiración sutil.
 
 ## Sustitución del master por rig completo
 
@@ -129,7 +161,9 @@ sutil.
 - [ ] Rostro nítido en 1080p/1440p.
 - [x] Prueba de ojos v2 con canvas y origen idénticos.
 - [x] Estado abierto obtenido directamente del master, sin parche adicional.
-- [ ] Bocas nuevas derivadas del master y aprobadas visualmente.
-- [ ] Expresiones mantienen pose y proporciones.
+- [x] Bocas mid/open v2 derivadas del master y registradas en origen exacto.
+- [x] Expresiones v2 localizadas mantienen pose, cuerpo y proporciones.
+- [x] Ciclo de fondo A/B/C separado del rig principal.
+- [x] Pasajeros ambientales v2 con alfa real y zonas seguras verificadas.
 - [ ] Ningún panel DOM tapa el rostro en las resoluciones objetivo.
-- [ ] Build y tests pasan con assets presentes y ausentes.
+- [x] Build y tests pasan con assets presentes y ausentes.

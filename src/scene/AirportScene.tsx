@@ -6,6 +6,7 @@ import {
 } from "react";
 import { Application, Container } from "pixi.js";
 import { logger } from "../logging/logger";
+import { AirportAmbience } from "./airport/AirportAmbience";
 import { AirportBackground } from "./airport/AirportBackground";
 import {
   resolveAirportAssets,
@@ -24,11 +25,15 @@ const logicalViewport = { width: 1_600, height: 900 } as const;
 
 export interface AirportSceneStatus {
   backgroundLoaded: boolean;
+  backgroundStatesLoaded: number;
+  backgroundMotion: "state-dissolve" | "static";
+  ambientCharactersLoaded: number;
+  ambientMotion: "fade-relocate" | "disabled";
   characterMode: CharacterAssetMode;
   availableLayers: readonly string[];
   canBlink: boolean;
   canPreviewSpeaking: boolean;
-  expressionMode: "full-frame";
+  expressionMode: "localized-overlay";
   overlaysCalibrated: {
     eyes: boolean;
     mouth: boolean;
@@ -145,6 +150,7 @@ export const AirportScene = forwardRef<AirportSceneHandle, AirportSceneProps>(
       let initialized = false;
       let resizeObserver: ResizeObserver | null = null;
       let background: AirportBackground | null = null;
+      let ambience: AirportAmbience | null = null;
       let agent: AirportAgent | null = null;
 
       const layout = (world: Container) => {
@@ -189,18 +195,21 @@ export const AirportScene = forwardRef<AirportSceneHandle, AirportSceneProps>(
           }
 
           background = await AirportBackground.create(
-            assets.availability.background,
+            assets.availability,
+            app.ticker,
           );
+          ambience = await AirportAmbience.create(assets.availability, app.ticker);
           agent = await AirportAgent.create(assets, app.ticker);
           if (disposed) {
             agent.dispose();
+            ambience.dispose();
             background.dispose();
             return;
           }
           agentRef.current = agent;
 
           const world = new Container();
-          world.addChild(background.view, agent.view);
+          world.addChild(background.view, ambience.view, agent.view);
           app.stage.addChild(world);
           layout(world);
 
@@ -211,10 +220,18 @@ export const AirportScene = forwardRef<AirportSceneHandle, AirportSceneProps>(
           resizeObserver.observe(host);
 
           if (background.assetLoaded) {
-            await logger.info("asset.background.loaded");
+            await logger.info("asset.background.loaded", {
+              states: background.stateCount,
+              motion: background.motionMode,
+            });
           } else {
             await logger.warn("asset.missing.background");
           }
+
+          await logger.info("scene.ambience.ready", {
+            charactersLoaded: ambience.loadedCount,
+            motion: ambience.motionMode,
+          });
 
           if (assets.availability.agentMaster) {
             await logger.info("asset.agentMaster.loaded", {
@@ -227,7 +244,6 @@ export const AirportScene = forwardRef<AirportSceneHandle, AirportSceneProps>(
             await logger.info("asset.body.loaded");
           }
           const expressions = [
-            "expressionNeutral",
             "expressionSmile",
             "expressionConfused",
             "expressionSerious",
@@ -239,13 +255,13 @@ export const AirportScene = forwardRef<AirportSceneHandle, AirportSceneProps>(
               mode: agent.rig.status.expressionMode,
             });
           }
-          const eyes = ["eyesOpen", "eyesClosed"].filter((layer) =>
+          const eyes = ["eyesClosed"].filter((layer) =>
             loadedLayers.has(layer),
           );
           if (eyes.length > 0) {
             await logger.info("asset.eyes.loaded", { count: eyes.length });
           }
-          const mouths = ["mouthClosed", "mouthMid", "mouthOpen"].filter(
+          const mouths = ["mouthMid", "mouthOpen"].filter(
             (layer) => loadedLayers.has(layer),
           );
           if (mouths.length > 0) {
@@ -255,9 +271,7 @@ export const AirportScene = forwardRef<AirportSceneHandle, AirportSceneProps>(
           }
 
           const overlayLayers = [
-            "eyesOpen",
             "eyesClosed",
-            "mouthClosed",
             "mouthMid",
             "mouthOpen",
           ];
@@ -291,6 +305,10 @@ export const AirportScene = forwardRef<AirportSceneHandle, AirportSceneProps>(
           const rigStatus = agent.rig.status;
           const status: AirportSceneStatus = {
             backgroundLoaded: background.assetLoaded,
+            backgroundStatesLoaded: background.stateCount,
+            backgroundMotion: background.motionMode,
+            ambientCharactersLoaded: ambience.loadedCount,
+            ambientMotion: ambience.motionMode,
             characterMode: rigStatus.mode,
             availableLayers: rigStatus.availableLayers,
             canBlink: rigStatus.canBlink,
@@ -326,6 +344,7 @@ export const AirportScene = forwardRef<AirportSceneHandle, AirportSceneProps>(
         }
         agentRef.current = null;
         agent?.dispose();
+        ambience?.dispose();
         background?.dispose();
         if (initialized) {
           app.destroy({ removeView: true }, { children: true });

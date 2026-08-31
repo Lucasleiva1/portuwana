@@ -120,6 +120,7 @@ export function SceneDevControls({
   const [mouthState, setMouthState] = useState<MouthState>("closed");
   const [gridVisible, setGridVisible] = useState(false);
   const [eyeOverlayOpacity, setEyeOverlayOpacity] = useState(1);
+  const [mouthOverlayOpacity, setMouthOverlayOpacity] = useState(1);
 
   return (
     <details className="scene-dev-controls">
@@ -244,6 +245,25 @@ export function SceneDevControls({
               </div>
             </div>
             {sceneStatus?.overlaysCalibrated.mouth && <div className="overlay-calibrator__group">
+              <div className="overlay-calibrator__state">
+                <strong>mouth-mid-v2.png · mouth-open-v2.png</strong>
+                <span>base cerrada = agent-master-v2.png</span>
+              </div>
+              <label className="overlay-calibrator__opacity">
+                Opacidad boca · {Math.round(mouthOverlayOpacity * 100)}%
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={mouthOverlayOpacity}
+                  onChange={(event) => {
+                    const opacity = event.currentTarget.valueAsNumber;
+                    setMouthOverlayOpacity(opacity);
+                    onOverlayOpacity("mouth", opacity);
+                  }}
+                />
+              </label>
               <label>
                 Mouth state
                 <select
@@ -257,22 +277,21 @@ export function SceneDevControls({
                   <option value="open">open</option>
                 </select>
               </label>
-              <TransformInputs
-                transform={overlayTransforms.mouth[mouthState]}
-                onChange={(transform) =>
-                  onOverlayTransform("mouth", mouthState, transform)
-                }
-              />
+              {mouthState !== "closed" && <TransformInputs
+                  transform={overlayTransforms.mouth[mouthState]}
+                  onChange={(transform) =>
+                    onOverlayTransform("mouth", mouthState, transform)
+                  }
+                />}
               <div className="overlay-calibrator__previews">
                 {(["closed", "mid", "open"] as const).map((state) => (
                   <button
                     key={state}
                     type="button"
                     disabled={
+                      state !== "closed" &&
                       !sceneStatus?.availableLayers.includes(
-                        state === "closed"
-                          ? "mouthClosed"
-                          : state === "mid"
+                        state === "mid"
                             ? "mouthMid"
                             : "mouthOpen",
                       )

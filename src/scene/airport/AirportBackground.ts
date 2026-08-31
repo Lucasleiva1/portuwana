@@ -1,5 +1,18 @@
-import { Assets, Container, Graphics, Sprite, Text, type Texture } from "pixi.js";
-import { airportAssetPaths } from "./assetManifest";
+import {
+  Assets,
+  Container,
+  Graphics,
+  Sprite,
+  Text,
+  type Texture,
+  type Ticker,
+} from "pixi.js";
+import {
+  airportAssetPaths,
+  type AirportAssetKey,
+  type AssetAvailability,
+} from "./assetManifest";
+import { getBackgroundMotionFrame } from "./backgroundMotion";
 
 export class AirportBackground {
   readonly view = new Container();
@@ -23,22 +36,27 @@ export class AirportBackground {
       letterSpacing: 1.2,
     },
   });
-  #sprite: Sprite | null = null;
+  readonly #ticker: Ticker;
+  readonly #sprites: Sprite[] = [];
   #assetLoaded = false;
+  #elapsedMs = 0;
 
-  private constructor() {
+  private constructor(ticker: Ticker) {
+    this.#ticker = ticker;
     this.#label.anchor.set(0.5);
     this.#subLabel.anchor.set(0.5);
     this.view.addChild(this.#fallback, this.#label, this.#subLabel);
   }
 
-  static async create(assetAvailable: boolean): Promise<AirportBackground> {
-    const background = new AirportBackground();
-    if (assetAvailable) {
+  static async create(
+    availability: AssetAvailability,
+    ticker: Ticker,
+  ): Promise<AirportBackground> {
+    const background = new AirportBackground(ticker);
+    if (availability.background) {
       try {
         const texture = await Assets.load<Texture>(airportAssetPaths.background);
-        background.#sprite = new Sprite(texture);
-        background.view.addChildAt(background.#sprite, 0);
+        background.#addStateSprite(texture);
         background.#fallback.visible = false;
         background.#label.visible = false;
         background.#subLabel.visible = false;
@@ -47,11 +65,42 @@ export class AirportBackground {
         background.#assetLoaded = false;
       }
     }
+
+    if (background.#assetLoaded) {
+      const optionalStates: readonly AirportAssetKey[] = [
+        "backgroundStateB",
+        "backgroundStateC",
+      ];
+      for (const key of optionalStates) {
+        if (!availability[key]) {
+          continue;
+        }
+        try {
+          const texture = await Assets.load<Texture>(airportAssetPaths[key]);
+          background.#addStateSprite(texture);
+        } catch {
+          // Optional motion states fail closed to the canonical background.
+        }
+      }
+    }
+
+    if (background.#sprites.length > 1) {
+      background.#ticker.add(background.#update);
+    }
+    background.#updateSprites();
     return background;
   }
 
   get assetLoaded(): boolean {
     return this.#assetLoaded;
+  }
+
+  get stateCount(): number {
+    return this.#sprites.length;
+  }
+
+  get motionMode(): "state-dissolve" | "static" {
+    return this.stateCount > 1 ? "state-dissolve" : "static";
   }
 
   layout(width: number, height: number): void {
@@ -81,21 +130,44 @@ export class AirportBackground {
     this.#label.position.set(width * 0.42, height * 0.42);
     this.#subLabel.position.set(width * 0.42, height * 0.47);
 
-    if (this.#sprite) {
+    for (const sprite of this.#sprites) {
       const scale = Math.max(
-        width / this.#sprite.texture.width,
-        height / this.#sprite.texture.height,
+        width / sprite.texture.width,
+        height / sprite.texture.height,
       );
-      this.#sprite.scale.set(scale);
-      this.#sprite.position.set(
-        (width - this.#sprite.texture.width * scale) / 2,
-        (height - this.#sprite.texture.height * scale) / 2,
+      sprite.scale.set(scale);
+      sprite.position.set(
+        (width - sprite.texture.width * scale) / 2,
+        (height - sprite.texture.height * scale) / 2,
       );
     }
   }
 
   dispose(): void {
+    this.#ticker.remove(this.#update);
     this.view.removeFromParent();
     this.view.destroy({ children: true, texture: false, textureSource: false });
   }
+
+  #addStateSprite(texture: Texture): void {
+    const sprite = new Sprite(texture);
+    sprite.alpha = this.#sprites.length === 0 ? 1 : 0;
+    this.view.addChildAt(sprite, this.#sprites.length);
+    this.#sprites.push(sprite);
+  }
+
+  #updateSprites(): void {
+    const frame = getBackgroundMotionFrame(
+      this.#elapsedMs,
+      this.#sprites.length,
+    );
+    this.#sprites.forEach((sprite, index) => {
+      sprite.alpha = frame.alphas[index] ?? 0;
+    });
+  }
+
+  readonly #update = (ticker: Ticker): void => {
+    this.#elapsedMs += ticker.deltaMS;
+    this.#updateSprites();
+  };
 }

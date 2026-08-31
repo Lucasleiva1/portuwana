@@ -130,7 +130,6 @@ export class CharacterRig {
         this.#overlayCalibration.eyes && this.#sprites.has("eyesClosed"),
       canPreviewSpeaking:
         this.#overlayCalibration.mouth &&
-        this.#sprites.has("mouthClosed") &&
         this.#sprites.has("mouthMid") &&
         this.#sprites.has("mouthOpen"),
       expressionMode: this.#config.expressionMode,
@@ -161,21 +160,26 @@ export class CharacterRig {
     }
 
     const canonical = this.#sprites.get("agentMaster");
-    const selected =
-      expression === "neutral"
-        ? (canonical ?? this.#sprites.get(expressionLayers.neutral))
-        : this.#sprites.get(expressionLayers[expression]);
-    const fallback = canonical ?? this.#sprites.get(expressionLayers.neutral);
-    const sprite = selected ?? fallback;
     const body = this.#sprites.get("body");
-    if (body) {
-      body.visible = !sprite;
+    if (canonical) {
+      canonical.visible = true;
+      if (body) {
+        body.visible = false;
+      }
+    } else if (body) {
+      body.visible = true;
     }
-    if (sprite) {
-      sprite.visible = true;
-      return Boolean(selected);
+
+    if (expression === "neutral") {
+      return Boolean(canonical ?? body);
     }
-    return false;
+
+    const selected = this.#sprites.get(expressionLayers[expression]);
+    if (selected) {
+      selected.visible = true;
+      return true;
+    }
+    return Boolean(canonical ?? body);
   }
 
   setOverlayTransform(
@@ -277,6 +281,9 @@ export class CharacterRig {
 
   setMouth(state: MouthState): boolean {
     this.#hideMouth();
+    if (state === "closed") {
+      return true;
+    }
     const selected = this.#sprites.get(mouthLayers[state]);
     if (selected) {
       selected.visible = true;
@@ -316,7 +323,6 @@ export class CharacterRig {
   startSpeaking(): boolean {
     if (
       !this.#overlayCalibration.mouth ||
-      !this.#sprites.has("mouthClosed") ||
       !this.#sprites.has("mouthMid") ||
       !this.#sprites.has("mouthOpen")
     ) {
@@ -400,14 +406,11 @@ export class CharacterRig {
   async #loadOptionalLayers(): Promise<void> {
     const layers: readonly AirportAssetKey[] = [
       "agentMaster",
-      "expressionNeutral",
       "expressionSmile",
       "expressionConfused",
       "expressionSurprised",
       "expressionSerious",
-      "eyesOpen",
       "eyesClosed",
-      "mouthClosed",
       "mouthMid",
       "mouthOpen",
     ];
