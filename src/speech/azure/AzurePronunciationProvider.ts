@@ -1,6 +1,6 @@
 import type { PronunciationResult } from "../../schemas";
 import type {
-  AudioPayload,
+  PronunciationRequest,
   PronunciationProvider,
   ProviderAvailability,
 } from "../providers/types";
@@ -28,13 +28,9 @@ export class AzurePronunciationProvider implements PronunciationProvider {
   }
 
   async assess(
-    audio: AudioPayload,
-    referenceText: string,
-    locale: string,
+    request: PronunciationRequest,
   ): Promise<PronunciationResult> {
-    void audio;
-    void referenceText;
-    void locale;
+    void request;
     return this.#notConfigured();
   }
 }

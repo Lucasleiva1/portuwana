@@ -7,6 +7,7 @@ describe("LessonEngine", () => {
     const engine = new LessonEngine(airportArrivalLesson);
 
     expect(engine.start().id).toBe("welcome");
+    expect(engine.getCurrentLine().id).toBe("welcome-neutral");
     expect(engine.getCurrentTurn()).toBe(1);
     expect(engine.getTotalTurns()).toBe(7);
   });
@@ -33,10 +34,30 @@ describe("LessonEngine", () => {
 
   it("keeps a retry intent on the same node", () => {
     const engine = new LessonEngine(airportArrivalLesson);
-    const resolution = engine.resolveIntent("dont_understand");
+    const resolution = engine.resolveIntent("greeting");
 
     expect(resolution.status).toBe("retry");
     expect(resolution.reward).toBe(0);
+    expect(engine.getCurrentNode().id).toBe("welcome");
+    expect(engine.getCurrentLine().id).toBe("welcome-warm");
+  });
+
+  it("rotates compatible response variants deterministically", () => {
+    const engine = new LessonEngine(airportArrivalLesson);
+    engine.resolveIntent("greeting");
+    expect(engine.getCurrentLine().id).toBe("welcome-warm");
+    engine.resolveIntent("greeting");
+    expect(engine.getCurrentLine().id).toBe("welcome-neutral");
+  });
+
+  it("rotates natural recovery lines without moving the objective", () => {
+    const engine = new LessonEngine(airportArrivalLesson);
+    expect(engine.selectRecoveryLine("off_topic").id).toBe(
+      "recovery-off-topic-1",
+    );
+    expect(engine.selectRecoveryLine("off_topic").id).toBe(
+      "recovery-off-topic-2",
+    );
     expect(engine.getCurrentNode().id).toBe("welcome");
   });
 

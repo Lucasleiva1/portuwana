@@ -24,11 +24,12 @@ describe("unconfigured providers", () => {
   });
 
   it("returns notConfigured from Azure pronunciation", async () => {
-    const result = await new AzurePronunciationProvider().assess(
-      createSilentAudio(),
-      "Olá",
-      "pt-BR",
-    );
+    const result = await new AzurePronunciationProvider().assess({
+      audio: createSilentAudio(),
+      transcript: "Olá",
+      locale: "pt-BR",
+      mode: "guided-conversation",
+    });
     expect(result.status).toBe("notConfigured");
   });
 
@@ -37,6 +38,15 @@ describe("unconfigured providers", () => {
     expect(await stt.transcribe()).toBe("Ainda não.");
     stt.setResponse("Obrigado.");
     expect(await stt.transcribe()).toBe("Obrigado.");
-    expect((await new MockPronunciationProvider().assess()).status).toBe("mock");
+    expect(
+      (
+        await new MockPronunciationProvider().assess({
+          audio: createSilentAudio(),
+          transcript: "Obrigado.",
+          locale: "pt-BR",
+          mode: "guided-conversation",
+        })
+      ).status,
+    ).toBe("success");
   });
 });

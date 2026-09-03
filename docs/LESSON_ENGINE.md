@@ -30,10 +30,11 @@ Una lección contiene:
 - logros y vocabulario;
 - una lista de nodos de diálogo.
 
-Cada nodo define texto, traducción opcional, texto lento, pista, ejemplos,
-intents aceptados, transiciones, fallback, recompensa máxima, expresión y si
-es terminal. `lesson.schemas.ts` comprueba IDs únicos, referencias de inicio,
-transiciones, fallbacks y la presencia de un nodo terminal.
+La lección contiene un registro único de líneas NPC. Cada línea relaciona ID,
+texto, texto lento, traducción, assets opcionales, expresión, emoción y duración
+opcional. Los nodos sólo referencian líneas compatibles y definen pista,
+ejemplos, intents aceptados, transiciones, fallback, recompensa máxima, modo y
+si son terminales. `lesson.schemas.ts` valida también todas esas referencias.
 
 Una lección inválida provoca el estado XState `error`; la interfaz muestra un
 mensaje controlado y permite reintentar. No se desmonta la escena ni se produce
@@ -44,17 +45,18 @@ un crash de React.
 | Turno | Nodo | Intent principal | Siguiente nodo |
 | --- | --- | --- | --- |
 | 1 | `welcome` | `need_help` | `baggage-status` |
-| 2 | `baggage-status` | `not_yet` | `baggage-area` |
+| 2 | `baggage-status` | `baggage_not_collected` | `baggage-area` |
 | 3 | `baggage-area` | `confirm_baggage_area` | `ask-location` |
 | 4 | `ask-location` | `ask_location` | `direction` |
-| 5 | `direction` | `understood_direction` | `direction-confirmation` |
-| 6 | `direction-confirmation` | `thanks` / `acknowledge` | `closing` |
+| 5 | `direction` | `understood` | `direction-confirmation` |
+| 6 | `direction-confirmation` | `thanks` / `understood` | `closing` |
 | 7 | `closing` | terminal | lección completada |
 
-Los intents de repetición o falta de comprensión vuelven al mismo nodo sin
-sumar poder. Un intent desconocido tampoco avanza. Las rutas alternativas
-`no_help`, `already_have_baggage`, `deny` y `know_location` tienen transiciones
-explícitas y coherentes con la escena.
+`repeat_request` y `slow_request` repiten la última línea sin cambiar el nodo.
+Las respuestas parciales, ambiguas, fuera de tema, poco claras o silenciosas
+usan líneas de recuperación alternadas y no suman poder. Las rutas alternativas
+`no_help`, `baggage_problem`, `already_have_baggage`, `deny` y `know_location`
+tienen transiciones explícitas y coherentes con la escena.
 
 ## IntentProvider local
 
@@ -65,6 +67,10 @@ exigir coincidencia textual y reduce falsos positivos entre turnos.
 
 Su `confidence` es una señal heurística interna de 0 a 1. No se presenta al
 usuario como precisión científica y no participa del scoring.
+
+El contrato superior `ConversationProvider` deja preparada una implementación
+externa o de IA futura. El provider interpreta; no genera transiciones. El
+sistema local guiado sigue siendo el único activo y funciona offline.
 
 ## Ayuda progresiva
 
@@ -100,8 +106,9 @@ reducir su recompensa máxima mediante `powerReward`.
 La máquina contiene `booting`, `loadingLesson`, `npcSpeaking`,
 `waitingForUser`, `writing`, `recordingMock`, `processingResponse`,
 `analyzingIntent`, `showingFeedback`, `transitioningNode`, `lessonCompleted`,
-`paused` y `error`. También reserva `transcribing` y
-`pronunciationAssessment` para la integración futura.
+`paused` y `error`. `transcribing` conecta Whisper y los eventos globales de
+pronunciación solicitada, completada, no disponible o fallida actualizan el
+feedback sin cambiar el estado conversacional activo.
 
 El texto escrito y la transcripción mock entran por eventos distintos, pero
 ambos convergen en `analyzingIntent`. Por eso un STT real podrá reemplazar el
@@ -121,7 +128,8 @@ No se debe importar React ni PixiJS desde `src/lesson`.
 
 ## Integración de audio
 
-Las Partes 4 y 5 conectan captura de micrófono, VAD y `whisper.cpp` local. El
+Las Partes 4–6 conectan captura de micrófono, VAD y `whisper.cpp` local. El
 transcript se envía como texto a XState. `LocalIntentProvider` y `LessonEngine`
 no conocen ni necesitan conocer el origen escrito o hablado del texto. La
-evaluación de pronunciación real continúa fuera de alcance.
+evaluación de pronunciación se solicita en paralelo y un fallo nunca bloquea ni
+resta progreso.

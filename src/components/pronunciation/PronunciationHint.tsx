@@ -1,48 +1,38 @@
-interface PronunciationWord {
-  word: string;
-  assessment: "ótimo" | "praticar" | "quase";
-}
+import type { PronunciationFeedback } from "../../speech/pronunciation/pronunciationFeedback";
 
 interface PronunciationHintProps {
-  open: boolean;
+  feedback: PronunciationFeedback | null;
   onClose: () => void;
 }
 
-const words: readonly PronunciationWord[] = [
-  { word: "Onde", assessment: "ótimo" },
-  { word: "fica", assessment: "ótimo" },
-  { word: "retirada", assessment: "praticar" },
-  { word: "de", assessment: "ótimo" },
-  { word: "bagagem", assessment: "quase" },
-];
-
 export function PronunciationHint({
-  open,
+  feedback,
   onClose,
 }: PronunciationHintProps) {
-  if (!open) {
+  if (!feedback) {
     return null;
   }
 
   return (
-    <aside className="pronunciation-hint" aria-label="Pronúncia simulada">
+    <aside
+      className="pronunciation-hint"
+      aria-label="Feedback de pronúncia"
+      data-level={feedback.level}
+    >
       <div className="pronunciation-hint__header">
         <div>
-          <span>FEEDBACK MOCK</span>
-          <strong>Ver pronúncia</strong>
+          <span>PRONÚNCIA</span>
+          <strong>{feedback.message}</strong>
         </div>
         <button type="button" onClick={onClose}>
           Fechar
         </button>
       </div>
-      <div className="pronunciation-hint__words">
-        {words.map((item) => (
-          <span key={item.word} data-assessment={item.assessment}>
-            <strong>{item.word}</strong>
-            <small>{item.assessment}</small>
-          </span>
-        ))}
-      </div>
+      {feedback.recommendation && (
+        <p className="pronunciation-hint__recommendation">
+          {feedback.recommendation}
+        </p>
+      )}
     </aside>
   );
 }

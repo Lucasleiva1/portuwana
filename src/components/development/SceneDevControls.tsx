@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { AudioCaptureState } from "../../audio/audio.types";
 import type { AirportSceneStatus } from "../../scene/AirportScene";
 import type {
   CharacterExpression,
@@ -9,8 +10,9 @@ import type {
   MouthState,
 } from "../../scene/character/character.types";
 import type { DialogueNode } from "../../lesson/lesson.types";
-import type { WhisperModel } from "../../speech/whisper/whisper.config";
-import type { WhisperRuntimeStatus } from "../../speech/whisper/WhisperModelManager";
+import type { SuccessfulTranscriptResult } from "../../schemas/transcript";
+import type { FasterWhisperModel as WhisperModel } from "../../speech/faster-whisper/fasterWhisper.config";
+import type { FasterWhisperRuntimeStatus as WhisperRuntimeStatus } from "../../speech/faster-whisper/FasterWhisperModelManager";
 import {
   TechnicalStatusPanel,
   type TechnicalStatusItem,
@@ -24,6 +26,10 @@ interface SceneDevControlsProps {
   nodes: readonly DialogueNode[];
   whisperModel: WhisperModel;
   whisperStatus: WhisperRuntimeStatus | null;
+  audioCaptureState: AudioCaptureState;
+  audioLevel: number;
+  microphoneName: string;
+  lastTranscript: SuccessfulTranscriptResult | null;
   showTranscript: boolean;
   showProcessingTime: boolean;
   overlayTransforms: CharacterOverlayTransforms;
@@ -95,6 +101,10 @@ export function SceneDevControls({
   nodes,
   whisperModel,
   whisperStatus,
+  audioCaptureState,
+  audioLevel,
+  microphoneName,
+  lastTranscript,
   showTranscript,
   showProcessingTime,
   overlayTransforms,
@@ -129,7 +139,7 @@ export function SceneDevControls({
         <TechnicalStatusPanel
           items={statusItems}
           machineState={machineState}
-          phase="FASE 1 · PASO 5.5"
+          phase="FASE 1 · PARTE 8"
         />
         <div className="scene-dev-controls__actions">
           <label>
@@ -146,7 +156,7 @@ export function SceneDevControls({
             </select>
           </label>
           <label>
-            Whisper model
+            STT model
             <select
               value={whisperModel}
               onChange={(event) =>
@@ -154,16 +164,45 @@ export function SceneDevControls({
               }
             >
               <option value="base">
-                base{whisperStatus?.models.find((entry) => entry.model === "base")?.installed ? " · installed" : " · missing"}
+                base{whisperStatus?.model === "base" && whisperStatus.modelInstalled ? " · installed" : " · fallback"}
               </option>
               <option value="small">
-                small{whisperStatus?.models.find((entry) => entry.model === "small")?.installed ? " · installed" : " · missing"}
+                small{whisperStatus?.model === "small" && whisperStatus.modelInstalled ? " · installed" : " · missing"}
               </option>
             </select>
           </label>
           <div className="scene-dev-controls__meta">
             <span>Language: pt</span>
-            <span>whisper.cpp {whisperStatus?.version ?? "checking"}</span>
+            <span>Micrófono: {microphoneName}</span>
+            <span>Captura: {audioCaptureState} · mono 16 kHz</span>
+            <span>Nivel RMS: {Math.round(audioLevel * 100)}%</span>
+            <span>VAD: Silero v5 · silencio 600 ms · pre-roll 250 ms</span>
+            <span>
+              Faster-Whisper {whisperStatus?.fasterWhisperVersion ?? "checking"}
+            </span>
+            <span>CTranslate2 {whisperStatus?.ctranslate2Version ?? "checking"}</span>
+            <span>
+              Backend: {whisperStatus?.backend ?? "checking"} · {whisperStatus?.computeType ?? "—"}
+            </span>
+            <span>GPU: {whisperStatus?.gpuName ?? "no detectada"}</span>
+            <span>Driver: {whisperStatus?.driverVersion ?? "—"}</span>
+            <span>
+              VRAM: {whisperStatus?.vramUsedMiB ?? "—"} / {whisperStatus?.vramTotalMiB ?? "—"} MiB
+            </span>
+            <span>Modelo cargado: {whisperStatus?.loadMs ?? "—"} ms</span>
+            <span>Audio: {lastTranscript ? `${Math.round(lastTranscript.durationMs)} ms` : "—"}</span>
+            <span>
+              Inferencia: {lastTranscript?.inferenceMs != null ? `${Math.round(lastTranscript.inferenceMs)} ms` : "—"}
+            </span>
+            <span>
+              Fin de voz → texto: {lastTranscript ? `${Math.round(lastTranscript.processingMs)} ms` : "—"}
+            </span>
+            <span>
+              RTF: {lastTranscript ? lastTranscript.realTimeFactor.toFixed(2) : "—"}
+            </span>
+            {whisperStatus?.fallbackReason && (
+              <span>Fallback: {whisperStatus.fallbackReason}</span>
+            )}
           </div>
           <section className="overlay-calibrator">
             <div className="overlay-calibrator__heading">

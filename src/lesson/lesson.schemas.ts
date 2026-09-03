@@ -8,7 +8,7 @@ export const vocabularyItemSchema = z
   })
   .strict();
 
-export const dialogueNodeSchema = z
+export const npcLineSchema = z
   .object({
     id: z.string().trim().min(1),
     speaker: z.string().trim().min(1),
@@ -17,37 +17,89 @@ export const dialogueNodeSchema = z
     slowAudioAsset: z.string().trim().min(1).optional(),
     translation: z.string().trim().min(1).optional(),
     slowText: z.string().trim().min(1).optional(),
+    expression: z
+      .enum(["neutral", "smile", "confused", "surprised", "serious"])
+      .optional(),
+    emotion: z.enum(["neutral", "warm", "reassuring", "focused"]).optional(),
+    durationMs: z.number().int().positive().optional(),
+  })
+  .strict();
+
+export const dialogueNodeSchema = z
+  .object({
+    id: z.string().trim().min(1),
+    lineIds: z.array(z.string().trim().min(1)).min(1),
     hint: z.string().trim().min(1).optional(),
     exampleAnswers: z.array(z.string().trim().min(1)).min(1).optional(),
     acceptedIntents: z.array(z.string().trim().min(1)),
     transitions: z.record(z.string().trim().min(1), z.string().trim().min(1)),
     fallbackNodeId: z.string().trim().min(1).optional(),
     powerReward: z.number().int().min(0).max(100).optional(),
-    expression: z
-      .enum(["neutral", "smile", "confused", "surprised", "serious"])
-      .optional(),
+    mode: z.enum(["guided-conversation", "guided-practice"]).optional(),
+    targetPhrase: z.string().trim().min(1).optional(),
     terminal: z.boolean().optional(),
   })
   .strict();
 
 export const lessonSchema = z
   .object({
-    version: z.literal(1),
+    version: z.literal(2),
     id: z.string().trim().min(1),
     title: z.string().trim().min(1),
     locale: z.literal("pt-BR"),
     level: z.literal("A1"),
     scene: z.literal("airport-arrival"),
+    defaultMode: z.enum(["guided-conversation", "guided-practice"]),
     startNodeId: z.string().trim().min(1),
     achievements: z.array(z.string().trim().min(1)).min(1),
     vocabulary: z.array(vocabularyItemSchema).min(1),
+    lines: z.array(npcLineSchema).min(1),
+    recoveryLineIds: z
+      .object({
+        unclear: z.array(z.string().trim().min(1)).min(1),
+        partial_match: z.array(z.string().trim().min(1)).min(1),
+        ambiguous: z.array(z.string().trim().min(1)).min(1),
+        off_topic: z.array(z.string().trim().min(1)).min(1),
+        silence: z.array(z.string().trim().min(1)).min(1),
+      })
+      .strict(),
     nodes: z.array(dialogueNodeSchema).min(1),
   })
   .strict()
   .superRefine((lesson, context) => {
     const nodeIds = new Set<string>();
+    const lineIds = new Set<string>();
+
+    lesson.lines.forEach((line, index) => {
+      if (lineIds.has(line.id)) {
+        context.addIssue({
+          code: "custom",
+          message: "NPC line ids must be unique",
+          path: ["lines", index, "id"],
+        });
+      }
+      lineIds.add(line.id);
+    });
 
     lesson.nodes.forEach((node, index) => {
+      node.lineIds.forEach((lineId, lineIndex) => {
+        if (!lineIds.has(lineId)) {
+          context.addIssue({
+            code: "custom",
+            message: `Dialogue line ${lineId} does not exist`,
+            path: ["nodes", index, "lineIds", lineIndex],
+          });
+        }
+      });
+
+      if ((node.mode ?? lesson.defaultMode) === "guided-practice" && !node.targetPhrase) {
+        context.addIssue({
+          code: "custom",
+          message: "Guided practice nodes must define a targetPhrase",
+          path: ["nodes", index, "targetPhrase"],
+        });
+      }
+
       if (nodeIds.has(node.id)) {
         context.addIssue({
           code: "custom",
@@ -109,6 +161,18 @@ export const lessonSchema = z
           path: ["nodes", index, "fallbackNodeId"],
         });
       }
+    });
+
+    Object.entries(lesson.recoveryLineIds).forEach(([kind, recoveryIds]) => {
+      recoveryIds.forEach((lineId, index) => {
+        if (!lineIds.has(lineId)) {
+          context.addIssue({
+            code: "custom",
+            message: `Recovery line ${lineId} does not exist`,
+            path: ["recoveryLineIds", kind, index],
+          });
+        }
+      });
     });
 
     if (!lesson.nodes.some((node) => node.terminal)) {

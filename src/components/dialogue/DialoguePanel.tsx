@@ -7,6 +7,7 @@ interface DialoguePanelProps {
   translation?: string | undefined;
   showTranslation: boolean;
   onReplay: () => void;
+  onLookupWord?: ((word: string) => void) | undefined;
 }
 
 export function DialoguePanel({
@@ -15,7 +16,10 @@ export function DialoguePanel({
   translation,
   showTranslation,
   onReplay,
+  onLookupWord,
 }: DialoguePanelProps) {
+  const lineParts = line.match(/[\p{L}\p{M}]+(?:['’-][\p{L}\p{M}]+)*|[^\p{L}\p{M}]+/gu) ?? [line];
+
   return (
     <section className="dialogue-panel" aria-live="polite">
       <div className="dialogue-panel__speaker-row">
@@ -30,7 +34,23 @@ export function DialoguePanel({
           <span>Ouvir novamente</span>
         </button>
       </div>
-      <p className="dialogue-panel__line">{line}</p>
+      <p className="dialogue-panel__line">
+        {lineParts.map((part, index) =>
+          onLookupWord && /[\p{L}\p{M}]/u.test(part) ? (
+            <button
+              key={`${part}-${index}`}
+              type="button"
+              className="dialogue-panel__lookup-word"
+              onClick={() => onLookupWord(part)}
+              title={`Consultar “${part}” en el diccionario`}
+            >
+              {part}
+            </button>
+          ) : (
+            <span key={`${part}-${index}`}>{part}</span>
+          ),
+        )}
+      </p>
       <div className="dialogue-panel__waveform" aria-hidden="true">
         {Array.from({ length: 17 }, (_, index) => (
           <span

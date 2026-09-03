@@ -3,7 +3,7 @@
 ## Arquitectura actual
 
 ```text
-texto del nodo
+línea activa del registro de la lección
   → NpcSpeechService
       1. LocalVoiceProvider
       2. TTSProvider configurado
@@ -13,14 +13,14 @@ texto del nodo
   → CharacterRig
 ```
 
-`DialogueNode` admite `audioAsset` y `slowAudioAsset`. Los WAV definitivos se
-ubicarán en `public/assets/audio/airport/`; el README de esa carpeta lista los
-siete nombres previstos. No se agregó ninguna voz inventada o descargada.
+`Lesson.lines` es el registro único para texto, asset normal, asset lento,
+expresión, emoción y duración opcional. Los WAV definitivos se ubicarán en
+`public/assets/audio/airport/`. No se agregó ninguna voz inventada o descargada.
 
-Si existe `slowAudioAsset`, `Mais devagar` lo usa. Si sólo existe el asset normal,
-la reproducción baja de forma moderada a 0.82×. Si falta o está corrupto, la
-frase sigue visible, se registra `speech.npc.assetMissing` o
-`speech.voice.unavailable`, se usa texto y la lección continúa.
+Para `Mais devagar`, el orden es: asset lento preparado, TTS a velocidad lenta,
+y asset normal a 0.82×. Si falta o está corrupto, la frase sigue visible, se
+registra el fallback y la lección continúa. El caché conserva planes TTS por
+línea y velocidad; `Ouvir novamente` no vuelve a sintetizar.
 
 ## Reproducción y boca
 
@@ -38,7 +38,7 @@ posterior segura, nunca hardcodeadas en el frontend.
 
 ## Estrategia recomendada
 
-Para la primera versión conviene generar y aprobar los siete clips fuera del
+Para la primera versión conviene generar y aprobar los clips fuera del
 runtime, incorporarlos como WAV locales y mantener la aplicación offline. Esto
 da voz consistente, cero latencia y ninguna dependencia cloud durante la lección.
 

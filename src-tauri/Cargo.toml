@@ -1,5 +1,6 @@
 [package]
 name = "portuwana"
+default-run = "portuwana"
 version = "0.1.0"
 description = "PORTUWANA desktop prototype"
 authors = ["PORTUWANA"]
@@ -24,4 +25,13 @@ tauri-plugin-shell = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+quick-xml = "0.41"
+flate2 = "1"
+bzip2 = "0.5"
+xz2 = "0.1"
+tar = "0.4"
+zip = { version = "4.6", default-features = false, features = ["deflate"] }
+unicode-normalization = "0.1"
+walkdir = "2"
+sha2 = "0.10"

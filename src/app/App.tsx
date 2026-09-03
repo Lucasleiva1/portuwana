@@ -1,8 +1,13 @@
 import { isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useMachine } from "@xstate/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AudioEngine } from "../audio/AudioEngine";
-import type { AudioInputDevice, RecordedAudio } from "../audio/audio.types";
+import type {
+  AudioCaptureState,
+  AudioInputDevice,
+  RecordedAudio,
+} from "../audio/audio.types";
 import { AudioError } from "../components/audio/AudioError";
 import { MicrophonePermission } from "../components/audio/MicrophonePermission";
 import { MicrophoneSelector } from "../components/audio/MicrophoneSelector";
@@ -13,20 +18,32 @@ import {
   shouldRenderSceneDevControls,
 } from "../components/development/SceneDevControls";
 import { DialoguePanel } from "../components/dialogue/DialoguePanel";
+import {
+  DictionaryAssistant,
+  type ContextualDictionaryRequest,
+  type DictionaryVoiceState,
+} from "../components/dictionary/DictionaryAssistant";
+import type { DictionaryDirection } from "../dictionary/dictionary.types";
 import { TranscriptPreview } from "../components/dialogue/TranscriptPreview";
 import { ContextualFeedback } from "../components/feedback/ContextualFeedback";
 import { HelpPopover, type HelpAction } from "../components/help/HelpPopover";
 import { LessonComplete } from "../components/lesson/LessonComplete";
 import { PauseMenu } from "../components/menu/PauseMenu";
 import { PortuguesePower } from "../components/progress/PortuguesePower";
+import { PronunciationHint } from "../components/pronunciation/PronunciationHint";
 import { SceneProgress } from "../components/progress/SceneProgress";
 import {
   type TechnicalStatus,
   type TechnicalStatusItem,
 } from "../components/TechnicalStatusPanel";
-import { LocalIntentProvider } from "../conversation/LocalIntentProvider";
+import { LocalGuidedConversationProvider } from "../conversation/ConversationProvider";
 import { helpLevelByKind } from "../lesson/help";
-import type { HelpKind, LessonResolution } from "../lesson/lesson.types";
+import type {
+  DialogueNode,
+  HelpKind,
+  LessonResolution,
+  NpcLine,
+} from "../lesson/lesson.types";
 import { airportArrivalLesson } from "../lesson/lessons";
 import { logger } from "../logging/logger";
 import {
@@ -44,13 +61,25 @@ import type {
   MouthState,
 } from "../scene/character/character.types";
 import { NpcSpeechService } from "../speech/playback/NpcSpeechService";
+import { AzurePronunciationProvider } from "../speech/azure/AzurePronunciationProvider";
 import { airportAgentVoice } from "../speech/voice/airportAgent.voice";
-import type { WhisperModel } from "../speech/whisper/whisper.config";
-import { WhisperModelManager, type WhisperRuntimeStatus } from "../speech/whisper/WhisperModelManager";
-import { WhisperProvider } from "../speech/whisper/WhisperProvider";
+import type {
+  FasterWhisperLanguage as WhisperLanguage,
+  FasterWhisperModel as WhisperModel,
+} from "../speech/faster-whisper/fasterWhisper.config";
+import {
+  FasterWhisperModelManager as WhisperModelManager,
+  type FasterWhisperRuntimeStatus as WhisperRuntimeStatus,
+} from "../speech/faster-whisper/FasterWhisperModelManager";
+import { FasterWhisperProvider } from "../speech/faster-whisper/FasterWhisperProvider";
+import { PortuwanaSTTProvider } from "../speech/faster-whisper/PortuwanaSTTProvider";
 import { conversationMachine } from "../state/conversationMachine";
 import { getConversationStateName } from "../state/conversation.types";
 import { initializeDatabase } from "../storage/database";
+import {
+  LocalPersistence,
+  type LocalSettings,
+} from "../storage/LocalPersistence";
 import "./styles.css";
 
 interface ReadinessState {
@@ -61,7 +90,18 @@ interface ReadinessState {
   sqlite: TechnicalStatus;
 }
 
-const localIntentProvider = new LocalIntentProvider();
+interface DictionaryVoiceRequest {
+  language: WhisperLanguage;
+  onStateChange: (state: DictionaryVoiceState) => void;
+  resolve: (text: string) => void;
+  reject: (error: Error) => void;
+}
+
+type DictionaryVoiceCompletion =
+  | { status: "success"; text: string }
+  | { status: "error"; reason: string };
+
+const localConversationProvider = new LocalGuidedConversationProvider();
 
 function initialOverlayTransforms(): CharacterOverlayTransforms {
   return {
@@ -77,11 +117,25 @@ function initialOverlayTransforms(): CharacterOverlayTransforms {
   };
 }
 
+function persistSafely(
+  event: string,
+  operation: Promise<unknown> | undefined,
+): void {
+  if (!operation) {
+    return;
+  }
+  void operation.catch((error: unknown) => {
+    void logger.error(event, {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
 export default function App() {
   const [snapshot, send] = useMachine(conversationMachine, {
     input: {
       lesson: airportArrivalLesson,
-      intentProvider: localIntentProvider,
+      conversationProvider: localConversationProvider,
       initialPower: 55,
     },
   });
@@ -94,6 +148,8 @@ export default function App() {
   });
   const [sceneStatus, setSceneStatus] = useState<AirportSceneStatus | null>(null);
   const [audioLevel, setAudioLevel] = useState(0);
+  const [audioCaptureState, setAudioCaptureState] =
+    useState<AudioCaptureState>("idle");
   const [audioDevices, setAudioDevices] = useState<readonly AudioInputDevice[]>([]);
   const [whisperStatus, setWhisperStatus] =
     useState<WhisperRuntimeStatus | null>(null);
@@ -102,18 +158,35 @@ export default function App() {
   const [overlayTransforms, setOverlayTransforms] =
     useState<CharacterOverlayTransforms>(initialOverlayTransforms);
   const [completionDismissed, setCompletionDismissed] = useState(false);
+  const [contextualDictionaryRequest, setContextualDictionaryRequest] =
+    useState<ContextualDictionaryRequest | null>(null);
+  const [dictionaryCharacter, setDictionaryCharacter] =
+    useState<LocalSettings["dictionaryAssistant"]>("female");
+  const [dictionarySourcePath, setDictionarySourcePath] = useState<string | null>(null);
+  const [persistenceReady, setPersistenceReady] = useState(false);
   const startedRef = useRef(false);
   const appReadySentRef = useRef(false);
   const readyLoggedRef = useRef(false);
   const startedLessonRef = useRef<string | null>(null);
   const loggedNodeRef = useRef<string | null>(null);
   const loggedResolutionRef = useRef<LessonResolution | null>(null);
+  const loggedInterpretationRef = useRef<unknown>(null);
   const completionLoggedRef = useRef(false);
+  const localPersistenceRef = useRef<LocalPersistence | null>(null);
+  const persistedLessonRef = useRef<string | null>(null);
+  const persistedInterpretationRef = useRef<unknown>(null);
+  const persistedCompletionRef = useRef(false);
+  const sessionIdRef = useRef<string | null>(null);
+  const sessionReadyRef = useRef<Promise<string | null>>(Promise.resolve(null));
   const sceneRef = useRef<AirportSceneHandle>(null);
   const whisperModelManagerRef = useRef<WhisperModelManager | null>(null);
-  const whisperProviderRef = useRef<WhisperProvider | null>(null);
+  const whisperProviderRef = useRef<PortuwanaSTTProvider | null>(null);
   const transcriptionAudioRef = useRef<RecordedAudio | null>(null);
+  const pronunciationProviderRef = useRef(new AzurePronunciationProvider());
+  const pronunciationRequestCounterRef = useRef(0);
   const audioEngineRef = useRef<AudioEngine | null>(null);
+  const audioCaptureTargetRef = useRef<"lesson" | "dictionary">("lesson");
+  const dictionaryVoiceRequestRef = useRef<DictionaryVoiceRequest | null>(null);
   const audioDestroyTimerRef = useRef<number | null>(null);
   const npcSpeechRef = useRef(
     new NpcSpeechService({ voice: airportAgentVoice }),
@@ -126,21 +199,26 @@ export default function App() {
     whisperModelManagerRef.current = new WhisperModelManager();
   }
   if (!whisperProviderRef.current) {
-    whisperProviderRef.current = new WhisperProvider({
-      modelManager: whisperModelManagerRef.current,
+    whisperProviderRef.current = new PortuwanaSTTProvider({
+      primary: new FasterWhisperProvider({
+        modelManager: whisperModelManagerRef.current,
+      }),
     });
   }
   const context = snapshot.context;
   const machineState = getConversationStateName(snapshot.value);
-  const currentNode = context.currentNode ?? airportArrivalLesson.nodes[0];
+  const currentNode: DialogueNode =
+    context.currentNode ?? airportArrivalLesson.nodes[0];
+  const currentLine: NpcLine =
+    context.currentLine ?? airportArrivalLesson.lines[0];
   const lesson = context.lesson ?? airportArrivalLesson;
   const writeOpen = machineState === "writing";
   const pauseOpen = machineState === "paused";
   const lessonCompleted = machineState === "lessonCompleted";
   const displayedLine =
-    context.slowMode && currentNode.slowText
-      ? currentNode.slowText
-      : currentNode.text;
+    context.slowMode && currentLine.slowText
+      ? currentLine.slowText
+      : currentLine.text;
 
   const schedule = useCallback((callback: () => void, delay: number) => {
     const timer = window.setTimeout(() => {
@@ -156,6 +234,23 @@ export default function App() {
     timersRef.current.clear();
   }, []);
 
+  const finishDictionaryVoiceRequest = useCallback(
+    (completion: DictionaryVoiceCompletion) => {
+      const request = dictionaryVoiceRequestRef.current;
+      if (!request) {
+        return;
+      }
+      dictionaryVoiceRequestRef.current = null;
+      audioCaptureTargetRef.current = "lesson";
+      if (completion.status === "success") {
+        request.resolve(completion.text);
+      } else {
+        request.reject(new Error(completion.reason));
+      }
+    },
+    [],
+  );
+
   const refreshWhisperStatus = useCallback(async () => {
     const manager = whisperModelManagerRef.current;
     const provider = whisperProviderRef.current;
@@ -163,8 +258,8 @@ export default function App() {
       return;
     }
     try {
-      const status = await manager.getStatus();
       const availability = await provider.refreshStatus();
+      const status = await manager.getStatus();
       setWhisperStatus(status);
       setReadiness((current) => ({
         ...current,
@@ -172,7 +267,7 @@ export default function App() {
       }));
     } catch (error) {
       setReadiness((current) => ({ ...current, whisper: "error" }));
-      void logger.error("stt.whisper.statusFailed", {
+      void logger.error("stt.fasterWhisper.statusFailed", {
         message: error instanceof Error ? error.message : "unknown",
       });
     }
@@ -199,21 +294,96 @@ export default function App() {
     audio.setCallbacks({
       onDevicesChanged: setAudioDevices,
       onCaptureStateChanged: (state) => {
+        setAudioCaptureState(state);
+        if (audioCaptureTargetRef.current === "dictionary") {
+          const request = dictionaryVoiceRequestRef.current;
+          if (state === "recording") {
+            request?.onStateChange("recording");
+          } else if (state === "processing") {
+            request?.onStateChange("transcribing");
+          } else if (state === "requesting" || state === "listening") {
+            request?.onStateChange("listening");
+          }
+          return;
+        }
         if (state === "listening") {
           send({ type: "MICROPHONE_GRANTED" });
         }
       },
       onLevel: setAudioLevel,
-      onSpeechStart: () => send({ type: "SPEECH_DETECTED" }),
-      onSpeechEnd: () => send({ type: "SPEECH_ENDED" }),
-      onAudioCaptured: (recordedAudio) =>
-        send({ type: "AUDIO_CAPTURED", audio: recordedAudio }),
+      onSpeechStart: () => {
+        if (audioCaptureTargetRef.current === "dictionary") {
+          dictionaryVoiceRequestRef.current?.onStateChange("recording");
+          return;
+        }
+        send({ type: "SPEECH_DETECTED" });
+      },
+      onSpeechEnd: () => {
+        if (audioCaptureTargetRef.current === "dictionary") {
+          dictionaryVoiceRequestRef.current?.onStateChange("transcribing");
+          return;
+        }
+        send({ type: "SPEECH_ENDED" });
+      },
+      onAudioCaptured: (recordedAudio) => {
+        if (audioCaptureTargetRef.current === "dictionary") {
+          const request = dictionaryVoiceRequestRef.current;
+          const provider = whisperProviderRef.current;
+          if (!request || !provider) {
+            finishDictionaryVoiceRequest({
+              status: "error",
+              reason: "voice-provider-unavailable",
+            });
+            return;
+          }
+          request.onStateChange("transcribing");
+          void provider
+            .transcribe(recordedAudio, { language: request.language })
+            .then((result) => {
+              if (result.status === "success") {
+                finishDictionaryVoiceRequest({
+                  status: "success",
+                  text: result.text,
+                });
+              } else {
+                finishDictionaryVoiceRequest({
+                  status: "error",
+                  reason:
+                    result.status === "notConfigured"
+                      ? result.reason
+                      : result.message,
+                });
+              }
+            })
+            .catch((error: unknown) => {
+              finishDictionaryVoiceRequest({
+                status: "error",
+                reason: error instanceof Error ? error.message : "voice-failed",
+              });
+            });
+          return;
+        }
+        send({ type: "AUDIO_CAPTURED", audio: recordedAudio });
+      },
       onNoSpeech: (reason) => {
+        if (audioCaptureTargetRef.current === "dictionary") {
+          if (reason !== "misfire") {
+            finishDictionaryVoiceRequest({ status: "error", reason: "no-speech" });
+          }
+          return;
+        }
         if (reason !== "misfire") {
           send({ type: "NO_SPEECH", reason });
         }
       },
       onError: (error) => {
+        if (audioCaptureTargetRef.current === "dictionary") {
+          finishDictionaryVoiceRequest({
+            status: "error",
+            reason: error.message,
+          });
+          return;
+        }
         if (error.code === "permission-denied") {
           send({ type: "MICROPHONE_DENIED", message: error.message });
         } else {
@@ -240,7 +410,7 @@ export default function App() {
         audioDestroyTimerRef.current = null;
       }, 0);
     };
-  }, [send]);
+  }, [finishDictionaryVoiceRequest, send]);
 
   useEffect(() => {
     if (startedRef.current) {
@@ -250,19 +420,38 @@ export default function App() {
     void logger.info("app.start", { phase: "1.5" });
 
     void initializeDatabase()
-      .then((result) => {
+      .then(async (result) => {
         setReadiness((current) => ({
           ...current,
           sqlite: result.status === "ready" ? "ready" : "pending",
         }));
+        if (result.status === "ready") {
+          const persistence = new LocalPersistence(result.database);
+          localPersistenceRef.current = persistence;
+          const settings = await persistence.initialize();
+          setShowTranscript(settings.subtitles);
+          setDictionaryCharacter(settings.dictionaryAssistant);
+          setDictionarySourcePath(settings.dictionarySourcePath);
+          setPersistenceReady(true);
+        }
       })
       .catch((error: unknown) => {
         setReadiness((current) => ({ ...current, sqlite: "error" }));
-        const message = error instanceof Error ? error.message : "unknown error";
+        const message = error instanceof Error ? error.message : String(error);
         void logger.error("database.error", { message });
         send({ type: "FAIL", error: message });
       });
   }, [send]);
+
+  useEffect(() => {
+    if (!persistenceReady) {
+      return;
+    }
+    persistSafely(
+      "settings.subtitles.saveFailed",
+      localPersistenceRef.current?.setSetting("subtitles", showTranscript),
+    );
+  }, [persistenceReady, showTranscript]);
 
   useEffect(() => {
     if (
@@ -283,7 +472,7 @@ export default function App() {
     const audio = audioEngineRef.current;
     let cancelled = false;
     let fallbackTimer: number | null = null;
-    sceneRef.current?.previewExpression(currentNode.expression ?? "neutral");
+    sceneRef.current?.previewExpression(currentLine.expression ?? "neutral");
 
     const finishWithText = (reason: string) => {
       if (cancelled) {
@@ -291,7 +480,13 @@ export default function App() {
       }
       void logger.warn("speech.voice.unavailable", {
         nodeId: currentNode.id,
+        lineId: currentLine.id,
         reason,
+      });
+      void logger.warn("speech.voice.fallback", {
+        nodeId: currentNode.id,
+        lineId: currentLine.id,
+        fallback: "text",
       });
       sceneRef.current?.startSpeaking();
       fallbackTimer = schedule(() => {
@@ -300,7 +495,7 @@ export default function App() {
       }, 1_250);
     };
 
-    void npcSpeechRef.current.resolve(currentNode, context.slowMode).then(
+    void npcSpeechRef.current.resolve(currentLine, context.slowMode).then(
       async (plan) => {
         if (cancelled) {
           return;
@@ -321,7 +516,10 @@ export default function App() {
                 send({ type: "NPC_AUDIO_START" });
                 void logger.info("speech.npc.started", {
                   nodeId: currentNode.id,
+                  lineId: plan.lineId,
                   source: plan.source,
+                  cacheHit: plan.cacheHit,
+                  slow: context.slowMode,
                 });
               },
               onAmplitude: (amplitude) =>
@@ -332,6 +530,7 @@ export default function App() {
             sceneRef.current?.stopSpeaking();
             void logger.info("speech.npc.completed", {
               nodeId: currentNode.id,
+              lineId: plan.lineId,
               source: plan.source,
             });
             send({ type: "NPC_AUDIO_END" });
@@ -344,6 +543,7 @@ export default function App() {
           if (plan.source === "local") {
             void logger.warn("speech.npc.assetMissing", {
               nodeId: currentNode.id,
+              lineId: currentLine.id,
               asset: plan.url,
             });
           }
@@ -364,6 +564,7 @@ export default function App() {
     };
   }, [
     context.slowMode,
+    currentLine,
     currentNode,
     machineState,
     schedule,
@@ -403,7 +604,92 @@ export default function App() {
       .transcribe(recordedAudio)
       .then((result) => {
         if (result.status === "success") {
+          pronunciationRequestCounterRef.current += 1;
+          const requestId = `pronunciation-${pronunciationRequestCounterRef.current}`;
+          const pronunciationProvider = pronunciationProviderRef.current;
+          send({ type: "PRONUNCIATION_REQUESTED", requestId });
           send({ type: "TRANSCRIPTION_SUCCEEDED", result });
+          void logger.info("pronunciation.requested", {
+            requestId,
+            nodeId: currentNode.id,
+            provider: pronunciationProvider.id,
+            mode: context.conversationMode,
+          });
+          void pronunciationProvider
+            .assess({
+              audio: {
+                samples: recordedAudio.pcm,
+                sampleRate: recordedAudio.sampleRate,
+                channels: 1,
+              },
+              transcript: result.text,
+              locale: "pt-BR",
+              mode: context.conversationMode,
+              ...(currentNode.targetPhrase
+                ? { targetText: currentNode.targetPhrase }
+                : {}),
+            })
+            .then((pronunciationResult) => {
+              if (pronunciationResult.status === "success") {
+                send({
+                  type: "PRONUNCIATION_COMPLETED",
+                  requestId,
+                  result: pronunciationResult,
+                });
+                void logger.info("pronunciation.completed", {
+                  requestId,
+                  nodeId: currentNode.id,
+                  provider: pronunciationProvider.id,
+                  level:
+                    pronunciationResult.overallScore >= 90
+                      ? "clear"
+                      : pronunciationResult.overallScore >= 75
+                        ? "good"
+                        : pronunciationResult.overallScore >= 55
+                          ? "understandable"
+                          : "practice",
+                });
+                return;
+              }
+              if (pronunciationResult.status === "notConfigured") {
+                send({
+                  type: "PRONUNCIATION_UNAVAILABLE",
+                  requestId,
+                  result: pronunciationResult,
+                });
+                void logger.warn("pronunciation.unavailable", {
+                  requestId,
+                  nodeId: currentNode.id,
+                  provider: pronunciationProvider.id,
+                  reason: pronunciationResult.reason,
+                });
+                return;
+              }
+              send({
+                type: "PRONUNCIATION_FAILED",
+                requestId,
+                message: pronunciationResult.message,
+              });
+              void logger.error("pronunciation.error", {
+                requestId,
+                nodeId: currentNode.id,
+                provider: pronunciationProvider.id,
+                message: pronunciationResult.message,
+              });
+            })
+            .catch((error: unknown) => {
+              const message =
+                error instanceof Error
+                  ? error.message
+                  : "A avaliação de pronúncia falhou.";
+              send({ type: "PRONUNCIATION_FAILED", requestId, message });
+              void logger.error("pronunciation.error", {
+                requestId,
+                nodeId: currentNode.id,
+                provider: pronunciationProvider.id,
+                message,
+              });
+            });
           return;
         }
         if (result.status === "notConfigured") {
@@ -436,7 +722,14 @@ export default function App() {
               : "Não foi possível transcrever o áudio.",
         });
       });
-  }, [context.currentNodeId, context.lastRecordedAudio, machineState, send]);
+  }, [
+    context.conversationMode,
+    context.currentNodeId,
+    context.lastRecordedAudio,
+    currentNode,
+    machineState,
+    send,
+  ]);
 
   useEffect(() => {
     if (!context.lessonId || !context.currentNodeId) {
@@ -457,30 +750,118 @@ export default function App() {
   }, [context.currentNodeId, context.currentTurn, context.lessonId]);
 
   useEffect(() => {
-    const resolution = context.lastResolution;
-    if (!resolution || loggedResolutionRef.current === resolution) {
+    if (
+      !persistenceReady ||
+      !context.lessonId ||
+      persistedLessonRef.current === context.lessonId
+    ) {
       return;
     }
+    persistedLessonRef.current = context.lessonId;
+    const persistence = localPersistenceRef.current;
+    if (!persistence) {
+      return;
+    }
+    sessionReadyRef.current = persistence
+      .beginLessonSession(context.lessonId)
+      .then((sessionId) => {
+        sessionIdRef.current = sessionId;
+        return sessionId;
+      })
+      .catch((error: unknown) => {
+        void logger.error("session.startFailed", {
+          message: error instanceof Error ? error.message : "unknown",
+        });
+        return null;
+      });
+  }, [context.lessonId, persistenceReady]);
+
+  useEffect(() => {
+    const interpretation = context.lastIntentResult;
+    const resolution = context.lastResolution;
+    if (!interpretation || loggedInterpretationRef.current === interpretation) {
+      return;
+    }
+    loggedInterpretationRef.current = interpretation;
     loggedResolutionRef.current = resolution;
-    if (resolution.status === "unknown") {
-      void logger.warn("lesson.intent.unknown", { nodeId: resolution.fromNodeId });
+    const nodeId = resolution?.fromNodeId ?? context.currentNodeId;
+    if (interpretation.status === "ambiguous") {
+      void logger.warn("lesson.intent.ambiguous", {
+        nodeId,
+        alternatives: interpretation.alternatives,
+      });
+    } else if (interpretation.status === "off_topic") {
+      void logger.warn("lesson.intent.offTopic", { nodeId });
+    } else if (interpretation.status === "understood") {
+      void logger.info("lesson.intent.recognized", {
+        nodeId,
+        intent: interpretation.intent,
+        confidence: interpretation.confidence,
+      });
     } else {
-      void logger.info("lesson.intent.resolved", {
-        nodeId: resolution.fromNodeId,
-        intent: resolution.intent,
-        status: resolution.status,
+      void logger.warn("lesson.conversation.recovery", {
+        nodeId,
+        kind: interpretation.status,
       });
     }
-    if (resolution.reward > 0) {
+    if (resolution && resolution.reward > 0) {
       void logger.info("lesson.power.changed", {
         reward: resolution.reward,
         value: context.power,
       });
     }
-  }, [context.lastResolution, context.power]);
+  }, [
+    context.currentNodeId,
+    context.lastIntentResult,
+    context.lastResolution,
+    context.power,
+  ]);
 
   useEffect(() => {
-    if (context.feedback === "not-understood") {
+    const interpretation = context.lastIntentResult;
+    const persistence = localPersistenceRef.current;
+    if (
+      !persistence ||
+      !interpretation ||
+      persistedInterpretationRef.current === interpretation ||
+      !context.lessonId
+    ) {
+      return;
+    }
+    persistedInterpretationRef.current = interpretation;
+    const helpUsed = Object.values(context.helpUsage).some((value) => value === true);
+    const intent = interpretation.status === "understood" ? interpretation.intent : interpretation.status;
+    const lessonId = context.lessonId;
+    const sessionPromise = sessionReadyRef.current;
+    persistSafely(
+      "progress.turnSaveFailed",
+      (async () => {
+        const sessionId = sessionIdRef.current ?? await sessionPromise;
+        if (!sessionId) {
+          throw new Error("No hay una sesión persistente activa.");
+        }
+        await Promise.all([
+          persistence.recordTurn(sessionId, intent, helpUsed),
+          persistence.saveLessonProgress({
+            lessonId,
+            score: context.power,
+            power: context.power,
+            dimensions: context.powerDimensions,
+            completed: false,
+          }),
+        ]);
+      })(),
+    );
+  }, [
+    context.helpUsage,
+    context.lastIntentResult,
+    context.lessonId,
+    context.power,
+    context.powerDimensions,
+  ]);
+
+  useEffect(() => {
+    if (context.feedback && context.feedback !== "understood") {
       sceneRef.current?.previewExpression("confused");
     } else if (context.feedback === "understood") {
       sceneRef.current?.previewExpression("neutral");
@@ -497,6 +878,53 @@ export default function App() {
       });
     }
   }, [context.lessonId, context.power, lessonCompleted]);
+
+  useEffect(() => {
+    const persistence = localPersistenceRef.current;
+    if (
+      !lessonCompleted ||
+      persistedCompletionRef.current ||
+      !persistence ||
+      !context.lessonId
+    ) {
+      return;
+    }
+    persistedCompletionRef.current = true;
+    const lessonId = context.lessonId;
+    const sessionPromise = sessionReadyRef.current;
+    persistSafely(
+      "progress.completionSaveFailed",
+      (async () => {
+        const sessionId = sessionIdRef.current ?? await sessionPromise;
+        if (!sessionId) {
+          throw new Error("No hay una sesión persistente activa.");
+        }
+        await Promise.all([
+          persistence.saveLessonProgress({
+            lessonId,
+            score: context.power,
+            power: context.power,
+            dimensions: context.powerDimensions,
+            completed: true,
+          }),
+          persistence.finishLessonSession({
+            sessionId,
+            status: "completed",
+            finalScore: context.power,
+            pronunciation: context.pronunciationResult?.status === "success"
+              ? context.pronunciationResult.overallScore
+              : null,
+          }),
+        ]);
+      })(),
+    );
+  }, [
+    context.lessonId,
+    context.power,
+    context.powerDimensions,
+    context.pronunciationResult,
+    lessonCompleted,
+  ]);
 
   const handleSceneReady = useCallback((status: AirportSceneStatus) => {
     setSceneStatus(status);
@@ -549,11 +977,52 @@ export default function App() {
     if (machineState !== "waitingForUser") {
       return;
     }
+    audioCaptureTargetRef.current = "lesson";
     send({ type: "REQUEST_MICROPHONE" });
     void audioEngineRef.current?.startListening().catch(() => {
       // AudioEngine reports a typed non-fatal error through callbacks.
     });
   }, [machineState, send]);
+
+  const handleDictionaryVoiceInput = useCallback(
+    (
+      direction: DictionaryDirection,
+      onStateChange: (state: DictionaryVoiceState) => void,
+    ) => {
+      const audio = audioEngineRef.current;
+      if (!audio || audio.captureState !== "idle" || dictionaryVoiceRequestRef.current) {
+        return Promise.reject(new Error("audio-busy"));
+      }
+      const language: WhisperLanguage =
+        direction === "es-pt" ? "es" : direction === "pt-es" ? "pt" : "auto";
+      return new Promise<string>((resolve, reject) => {
+        dictionaryVoiceRequestRef.current = {
+          language,
+          onStateChange,
+          resolve,
+          reject,
+        };
+        audioCaptureTargetRef.current = "dictionary";
+        onStateChange("listening");
+        void audio.startListening().catch((error: unknown) => {
+          finishDictionaryVoiceRequest({
+            status: "error",
+            reason: error instanceof Error ? error.message : "voice-failed",
+          });
+        });
+      });
+    },
+    [finishDictionaryVoiceRequest],
+  );
+
+  const cancelDictionaryVoiceInput = useCallback(() => {
+    if (!dictionaryVoiceRequestRef.current) {
+      return;
+    }
+    void whisperProviderRef.current?.cancel();
+    void audioEngineRef.current?.cancelCapture();
+    finishDictionaryVoiceRequest({ status: "error", reason: "voice-cancelled" });
+  }, [finishDictionaryVoiceRequest]);
 
   const cancelRecording = useCallback(() => {
     if (machineState === "transcribing") {
@@ -587,6 +1056,10 @@ export default function App() {
         message: error instanceof Error ? error.message : "unknown",
       });
     });
+    persistSafely(
+      "settings.inputDevice.saveFailed",
+      localPersistenceRef.current?.setSetting("inputDeviceId", deviceId),
+    );
   }, []);
 
   const handleWrittenResponse = useCallback(
@@ -613,10 +1086,15 @@ export default function App() {
         level: helpLevelByKind[kind],
       });
       if (kind === "replay" || kind === "slower") {
+        void logger.info("speech.voice.replay", {
+          nodeId: context.currentNodeId,
+          lineId: currentLine.id,
+          slow: kind === "slower",
+        });
         send({ type: "REPLAY_NPC", slow: kind === "slower" });
       }
     },
-    [context.currentNodeId, send],
+    [context.currentNodeId, currentLine.id, send],
   );
 
   const toggleHelp = useCallback(() => {
@@ -626,15 +1104,73 @@ export default function App() {
   const restartLesson = useCallback(() => {
     clearTimers();
     void whisperProviderRef.current?.cancel();
+    void whisperProviderRef.current?.resetContext("airport-arrival");
     void audioEngineRef.current?.pauseAll();
     setCompletionDismissed(false);
     completionLoggedRef.current = false;
+    persistedCompletionRef.current = false;
+    persistedInterpretationRef.current = null;
+    const previousSessionId = sessionIdRef.current;
+    sessionIdRef.current = null;
     startedLessonRef.current = null;
     loggedNodeRef.current = null;
     loggedResolutionRef.current = null;
+    loggedInterpretationRef.current = null;
     send({ type: "RESTART" });
+    const persistence = localPersistenceRef.current;
+    const lessonId = context.lessonId;
+    sessionReadyRef.current = (async () => {
+      if (!persistence || !lessonId) {
+        return null;
+      }
+      if (previousSessionId) {
+        try {
+          await persistence.finishLessonSession({
+            sessionId: previousSessionId,
+            status: "abandoned",
+            finalScore: context.power,
+            pronunciation: null,
+          });
+        } catch (error) {
+          void logger.error("session.restartFinishFailed", {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      try {
+        const sessionId = await persistence.beginLessonSession(lessonId);
+        sessionIdRef.current = sessionId;
+        return sessionId;
+      } catch (error) {
+        void logger.error("session.restartStartFailed", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      }
+    })();
     void logger.info("lesson.restarted", { lessonId: context.lessonId });
-  }, [clearTimers, context.lessonId, send]);
+  }, [clearTimers, context.lessonId, context.power, send]);
+
+  const exitApplication = useCallback(async () => {
+    try {
+      await sessionReadyRef.current;
+      await localPersistenceRef.current?.flush();
+    } catch (error) {
+      await logger.error("ui.exit.persistenceFailed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+    void logger.info("ui.exit.requested");
+    if (isTauri()) {
+      await getCurrentWindow().close().catch((error: unknown) => {
+        void logger.error("ui.exit.failed", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+      return;
+    }
+    void logger.warn("ui.exit.unavailable", { reason: "not-running-in-tauri" });
+  }, []);
 
   const statusItems = useMemo<readonly TechnicalStatusItem[]>(
     () => [
@@ -642,9 +1178,9 @@ export default function App() {
       { label: "PixiJS", status: readiness.pixi },
       { label: "XState", status: "ready" },
       { label: "LessonEngine", status: context.engine ? "ready" : "checking" },
-      { label: "Intent local", status: "ready" },
+      { label: "Conversa guiada", status: "ready" },
       { label: "Audio", status: readiness.audio },
-      { label: "Whisper", status: readiness.whisper },
+      { label: "Faster-Whisper", status: readiness.whisper },
       { label: "SQLite", status: readiness.sqlite },
     ],
     [context.engine, readiness],
@@ -683,10 +1219,7 @@ export default function App() {
           }}
           onRestart={restartLesson}
           onExit={() => {
-            if (pauseOpen) {
-              send({ type: "RESUME" });
-            }
-            void logger.info("ui.exit.mock");
+            void exitApplication();
           }}
         />
       </header>
@@ -699,11 +1232,21 @@ export default function App() {
             showProcessingTime={import.meta.env.DEV && showProcessingTime}
           />
           <DialoguePanel
-            speaker={currentNode.speaker}
+            speaker={currentLine.speaker}
             line={displayedLine}
-            translation={currentNode.translation}
+            translation={currentLine.translation}
             showTranslation={context.showTranslation}
             onReplay={() => handleHelpAction("replay")}
+            onLookupWord={(term) => {
+              setContextualDictionaryRequest((current) => ({
+                id: (current?.id ?? 0) + 1,
+                term,
+              }));
+              void logger.info("dictionary.contextual.opened", {
+                term,
+                nodeId: context.currentNodeId,
+              });
+            }}
           />
           <ContextualFeedback
             state={context.feedback}
@@ -712,6 +1255,11 @@ export default function App() {
             onHelp={() => send({ type: "OPEN_HELP" })}
           />
         </div>
+
+        <PronunciationHint
+          feedback={context.pronunciationFeedback}
+          onClose={() => send({ type: "DISMISS_PRONUNCIATION" })}
+        />
 
         {context.helpMessage && (
           <div className="context-tip" role="status">
@@ -804,6 +1352,28 @@ export default function App() {
           </div>
         )}
 
+      <DictionaryAssistant
+        contextualRequest={contextualDictionaryRequest}
+        initialCharacter={dictionaryCharacter}
+        initialSourcePath={dictionarySourcePath}
+        onCharacterChange={(next) => {
+          setDictionaryCharacter(next);
+          persistSafely(
+            "settings.dictionaryAssistant.saveFailed",
+            localPersistenceRef.current?.setSetting("dictionaryAssistant", next),
+          );
+        }}
+        onSourcePathChange={(path) => {
+          setDictionarySourcePath(path);
+          persistSafely(
+            "settings.dictionarySourcePath.saveFailed",
+            localPersistenceRef.current?.setSetting("dictionarySourcePath", path),
+          );
+        }}
+        onVoiceInput={handleDictionaryVoiceInput}
+        onCancelVoiceInput={cancelDictionaryVoiceInput}
+      />
+
       {shouldRenderSceneDevControls(import.meta.env.DEV) && (
         <SceneDevControls
           sceneStatus={sceneStatus}
@@ -812,9 +1382,21 @@ export default function App() {
           currentNodeId={context.currentNodeId}
           nodes={lesson.nodes}
           whisperModel={
-            whisperProviderRef.current?.config.model ?? "base"
+            whisperProviderRef.current?.config.model ?? "small"
           }
           whisperStatus={whisperStatus}
+          audioCaptureState={audioCaptureState}
+          audioLevel={audioLevel}
+          microphoneName={
+            audioDevices.find(
+              (device) =>
+                device.deviceId ===
+                audioEngineRef.current?.devices.selectedDeviceId,
+            )?.label ??
+            audioDevices.find((device) => device.isDefault)?.label ??
+            "Dispositivo predeterminado"
+          }
+          lastTranscript={context.lastTranscript}
           showTranscript={showTranscript}
           showProcessingTime={showProcessingTime}
           overlayTransforms={overlayTransforms}

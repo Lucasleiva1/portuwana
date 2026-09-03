@@ -422,6 +422,25 @@ button:disabled {
   letter-spacing: -0.02em;
 }
 
+.dialogue-panel__lookup-word {
+  display: inline;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px dotted transparent;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  line-height: inherit;
+  cursor: help;
+  transition: color 160ms ease, border-color 160ms ease;
+}
+
+.dialogue-panel__lookup-word:hover {
+  border-bottom-color: var(--primary-light);
+  color: #b7f5ef;
+}
+
 .dialogue-panel__waveform {
   height: 15px;
   display: flex;
@@ -936,6 +955,24 @@ button:disabled {
   background: transparent;
   font-size: 10px;
   cursor: pointer;
+}
+
+.pronunciation-hint__recommendation {
+  margin: 11px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid rgb(155 170 179 / 15%);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.pronunciation-hint[data-level="clear"],
+.pronunciation-hint[data-level="good"] {
+  border-color: rgb(114 191 141 / 42%);
+}
+
+.pronunciation-hint[data-level="practice"] {
+  border-color: rgb(242 184 75 / 42%);
 }
 
 .pronunciation-hint__words {

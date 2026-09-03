@@ -11,7 +11,15 @@ export const intentInputSchema = z
 export const intentResultSchema = z
   .object({
     intent: z.string().trim().min(1),
+    status: z.enum([
+      "understood",
+      "partial_match",
+      "ambiguous",
+      "off_topic",
+      "unclear",
+    ]),
     understood: z.boolean(),
     confidence: z.number().min(0).max(1),
+    alternatives: z.array(z.string().trim().min(1)),
   })
   .strict();

@@ -1,9 +1,19 @@
 import { assign, fromPromise, setup } from "xstate";
-import type { IntentInput, IntentResult } from "../conversation/IntentProvider";
+import type { ConversationInput } from "../conversation/ConversationProvider";
+import type { IntentResult } from "../conversation/IntentProvider";
+import {
+  applyConversationDimensions,
+  applyPronunciationDimension,
+  createPortuguesePowerDimensions,
+} from "../lesson/portuguesePower";
 import { createEmptyHelpUsage, nextAvailableHelpLevel } from "../lesson/help";
 import { LessonEngine } from "../lesson/LessonEngine";
-import type { DialogueNode, Lesson } from "../lesson/lesson.types";
+import type { DialogueNode, Lesson, NpcLine, RecoveryKind } from "../lesson/lesson.types";
 import { applyPowerReward, clampPower } from "../lesson/scoring";
+import {
+  createPronunciationFeedback,
+  pronunciationPowerContribution,
+} from "../speech/pronunciation/pronunciationFeedback";
 import type {
   ConversationContext,
   ConversationEvent,
@@ -14,11 +24,12 @@ interface LoadedLesson {
   engine: LessonEngine;
   lesson: Lesson;
   node: DialogueNode;
+  line: NpcLine;
 }
 
-interface IntentAnalysisInput {
-  provider: ConversationMachineInput["intentProvider"];
-  request: IntentInput;
+interface ConversationAnalysisInput {
+  provider: ConversationMachineInput["conversationProvider"];
+  request: ConversationInput;
   forceUnknown: boolean;
 }
 
@@ -29,16 +40,23 @@ const loadLesson = fromPromise<LoadedLesson, { lesson: unknown }>(
       engine,
       lesson: engine.getLesson(),
       node: engine.start(),
+      line: engine.getCurrentLine(),
     };
   },
 );
 
-const analyzeIntent = fromPromise<IntentResult, IntentAnalysisInput>(
+const analyzeConversation = fromPromise<IntentResult, ConversationAnalysisInput>(
   async ({ input }) => {
     if (input.forceUnknown) {
-      return { intent: "unknown", understood: false, confidence: 0 };
+      return {
+        intent: "unclear",
+        status: "unclear",
+        understood: false,
+        confidence: 0,
+        alternatives: [],
+      };
     }
-    return input.provider.analyze(input.request);
+    return input.provider.interpret(input.request);
   },
 );
 
@@ -61,13 +79,14 @@ export const conversationMachine = setup({
   },
   actors: {
     loadLesson,
-    analyzeIntent,
+    analyzeConversation,
   },
   guards: {
     currentNodeIsTerminal: ({ context }) => context.currentNode?.terminal === true,
     resolutionMovesToNode: ({ context }) =>
       context.lastResolution !== null &&
       context.lastResolution.toNodeId !== context.lastResolution.fromNodeId,
+    nextActionIsSpeech: ({ context }) => context.nextAction === "speak",
   },
   delays: {
     processingResponseDelay: ({ context }) => context.processingDelayMs,
@@ -120,14 +139,31 @@ export const conversationMachine = setup({
       lastRecordedAudio: null,
       sttErrorCode: null,
     })),
-    captureNoSpeech: assign(({ event }) => ({
-      audioError:
-        event.type === "NO_SPEECH" && event.reason === "recording-timeout"
-          ? "A gravação demorou demais. Tente novamente."
-          : "Não ouvi nada. Tente novamente.",
-      lastRecordedAudio: null,
-      sttErrorCode: null,
-    })),
+    prepareSilenceRecovery: assign(({ context }) => {
+      const engine = requireEngine(context);
+      const resolution = engine.resolveIntent("silence");
+      const line = engine.selectRecoveryLine("silence");
+      return {
+        audioError: null,
+        lastRecordedAudio: null,
+        sttErrorCode: null,
+        lastIntent: "silence",
+        lastIntentResult: {
+          intent: "silence",
+          status: "unclear" as const,
+          understood: false,
+          confidence: 0,
+          alternatives: [],
+        },
+        lastResolution: resolution,
+        lastRecoveryKind: "silence" as const,
+        currentLine: line,
+        feedback: "unclear" as const,
+        responseAttempt: context.responseAttempt + 1,
+        nextAction: "speak" as const,
+        slowMode: false,
+      };
+    }),
     captureRecordedAudio: assign(({ event }) => ({
       lastRecordedAudio: event.type === "AUDIO_CAPTURED" ? event.audio : null,
       audioError: null,
@@ -173,7 +209,9 @@ export const conversationMachine = setup({
       const node = engine.getCurrentNode();
       return {
         currentNode: node,
+        currentLine: engine.getCurrentLine(),
         currentNodeId: node.id,
+        conversationMode: engine.getConversationMode(),
         currentTurn: engine.getCurrentTurn(),
         helpUsage: engine.getHelpUsage(),
         availableHelpLevel: 1 as const,
@@ -182,6 +220,9 @@ export const conversationMachine = setup({
         showTranslation: false,
         slowMode: false,
         feedback: null,
+        responseAttempt: 0,
+        lastRecoveryKind: null,
+        nextAction: "feedback" as const,
         lastTranscript: null,
       };
     }),
@@ -227,13 +268,18 @@ export const conversationMachine = setup({
       lesson: null,
       lessonId: null,
       currentNode: null,
+      currentLine: null,
       currentNodeId: null,
+      conversationMode: "guided-conversation" as const,
       currentTurn: 0,
       totalTurns: 0,
       lastUserText: null,
       lastIntent: null,
       lastIntentResult: null,
       lastResolution: null,
+      responseAttempt: 0,
+      lastRecoveryKind: null,
+      nextAction: "feedback" as const,
       helpUsage: createEmptyHelpUsage(),
       availableHelpLevel: 1 as const,
       helpOpen: false,
@@ -242,12 +288,17 @@ export const conversationMachine = setup({
       slowMode: false,
       feedback: null,
       power: context.initialPower,
+      powerDimensions: createPortuguesePowerDimensions(context.initialPower),
       forceUnknownIntent: false,
       microphonePermission: context.microphonePermission,
       audioError: null,
       sttErrorCode: null,
       lastRecordedAudio: null,
       lastTranscript: null,
+      pronunciationStatus: "idle" as const,
+      pronunciationRequestId: null,
+      pronunciationResult: null,
+      pronunciationFeedback: null,
       error: null,
     })),
     devJumpToNode: assign(({ context, event }) => {
@@ -258,9 +309,14 @@ export const conversationMachine = setup({
       const node = engine.jumpToNode(event.nodeId);
       return {
         currentNode: node,
+        currentLine: engine.getCurrentLine(),
         currentNodeId: node.id,
+        conversationMode: engine.getConversationMode(),
         currentTurn: engine.getCurrentTurn(),
         lastResolution: null,
+        responseAttempt: 0,
+        lastRecoveryKind: null,
+        nextAction: "feedback" as const,
         feedback: null,
         helpUsage: engine.getHelpUsage(),
         availableHelpLevel: 1 as const,
@@ -276,14 +332,76 @@ export const conversationMachine = setup({
     })),
     devSetPower: assign(({ event }) => ({
       power: event.type === "DEV_SET_POWER" ? clampPower(event.value) : 0,
+      powerDimensions: createPortuguesePowerDimensions(
+        event.type === "DEV_SET_POWER" ? event.value : 0,
+      ),
     })),
+    requestPronunciation: assign(({ event }) =>
+      event.type === "PRONUNCIATION_REQUESTED"
+        ? {
+            pronunciationStatus: "assessing" as const,
+            pronunciationRequestId: event.requestId,
+            pronunciationResult: null,
+            pronunciationFeedback: null,
+          }
+        : {},
+    ),
+    completePronunciation: assign(({ context, event }) => {
+      if (
+        event.type !== "PRONUNCIATION_COMPLETED" ||
+        event.requestId !== context.pronunciationRequestId
+      ) {
+        return {};
+      }
+      const contribution = pronunciationPowerContribution(event.result.overallScore);
+      return {
+        pronunciationStatus: "ready" as const,
+        pronunciationResult: event.result,
+        pronunciationFeedback: createPronunciationFeedback(event.result),
+        power: applyPowerReward(context.power, contribution),
+        powerDimensions: applyPronunciationDimension(
+          context.powerDimensions,
+          contribution,
+        ),
+      };
+    }),
+    markPronunciationUnavailable: assign(({ context, event }) => {
+      if (
+        event.type !== "PRONUNCIATION_UNAVAILABLE" ||
+        event.requestId !== context.pronunciationRequestId
+      ) {
+        return {};
+      }
+      return {
+        pronunciationStatus: "unavailable" as const,
+        pronunciationResult: event.result,
+        pronunciationFeedback: null,
+      };
+    }),
+    markPronunciationFailed: assign(({ context, event }) => {
+      if (
+        event.type !== "PRONUNCIATION_FAILED" ||
+        event.requestId !== context.pronunciationRequestId
+      ) {
+        return {};
+      }
+      return {
+        pronunciationStatus: "error" as const,
+        pronunciationResult: {
+          status: "error" as const,
+          message: event.message,
+        },
+        pronunciationFeedback: null,
+      };
+    }),
+    dismissPronunciation: assign({ pronunciationFeedback: null }),
   },
 }).createMachine({
   id: "portuwanaConversation",
   initial: "booting",
   context: ({ input }) => ({
     lessonSource: input.lesson,
-    intentProvider: input.intentProvider,
+    conversationProvider: input.conversationProvider,
     initialPower: clampPower(input.initialPower ?? 55),
     processingDelayMs: Math.max(0, input.timing?.processingMs ?? 450),
     feedbackDelayMs: Math.max(0, input.timing?.feedbackMs ?? 850),
@@ -291,13 +409,18 @@ export const conversationMachine = setup({
     lesson: null,
     lessonId: null,
     currentNode: null,
+    currentLine: null,
     currentNodeId: null,
+    conversationMode: "guided-conversation",
     currentTurn: 0,
     totalTurns: 0,
     lastUserText: null,
     lastIntent: null,
     lastIntentResult: null,
     lastResolution: null,
+    responseAttempt: 0,
+    lastRecoveryKind: null,
+    nextAction: "feedback",
     helpUsage: createEmptyHelpUsage(),
     availableHelpLevel: 1,
     helpOpen: false,
@@ -306,12 +429,17 @@ export const conversationMachine = setup({
     slowMode: false,
     feedback: null,
     power: clampPower(input.initialPower ?? 55),
+    powerDimensions: createPortuguesePowerDimensions(input.initialPower ?? 55),
     forceUnknownIntent: false,
     microphonePermission: "unknown",
     audioError: null,
     sttErrorCode: null,
     lastRecordedAudio: null,
     lastTranscript: null,
+    pronunciationStatus: "idle",
+    pronunciationRequestId: null,
+    pronunciationResult: null,
+    pronunciationFeedback: null,
     error: null,
   }),
   on: {
@@ -329,6 +457,11 @@ export const conversationMachine = setup({
     },
     DEV_FORCE_UNKNOWN: { actions: "devForceUnknown" },
     DEV_SET_POWER: { actions: "devSetPower" },
+    PRONUNCIATION_REQUESTED: { actions: "requestPronunciation" },
+    PRONUNCIATION_COMPLETED: { actions: "completePronunciation" },
+    PRONUNCIATION_UNAVAILABLE: { actions: "markPronunciationUnavailable" },
+    PRONUNCIATION_FAILED: { actions: "markPronunciationFailed" },
+    DISMISS_PRONUNCIATION: { actions: "dismissPronunciation" },
   },
   states: {
     booting: {
@@ -342,13 +475,15 @@ export const conversationMachine = setup({
         onDone: {
           target: "active",
           actions: assign(({ event }) => {
-            const { engine, lesson, node } = event.output;
+            const { engine, lesson, node, line } = event.output;
             return {
               engine,
               lesson,
               lessonId: lesson.id,
               currentNode: node,
+              currentLine: line,
               currentNodeId: node.id,
+              conversationMode: engine.getConversationMode(),
               currentTurn: engine.getCurrentTurn(),
               totalTurns: engine.getTotalTurns(),
               helpUsage: engine.getHelpUsage(),
@@ -444,8 +579,8 @@ export const conversationMachine = setup({
           on: {
             SPEECH_DETECTED: "recording",
             NO_SPEECH: {
-              target: "waitingForUser",
-              actions: "captureNoSpeech",
+              target: "npcSpeaking",
+              actions: "prepareSilenceRecovery",
             },
             AUDIO_ERROR: {
               target: "waitingForUser",
@@ -458,8 +593,8 @@ export const conversationMachine = setup({
           on: {
             SPEECH_ENDED: "processingAudio",
             NO_SPEECH: {
-              target: "waitingForUser",
-              actions: "captureNoSpeech",
+              target: "npcSpeaking",
+              actions: "prepareSilenceRecovery",
             },
             AUDIO_ERROR: {
               target: "waitingForUser",
@@ -503,8 +638,8 @@ export const conversationMachine = setup({
         },
         analyzingIntent: {
           invoke: {
-            id: "analyzeIntent",
-            src: "analyzeIntent",
+            id: "analyzeConversation",
+            src: "analyzeConversation",
             input: ({ context }) => {
               const engine = requireEngine(context);
               const text = context.lastUserText;
@@ -512,32 +647,102 @@ export const conversationMachine = setup({
                 throw new Error("No response is available for intent analysis");
               }
               return {
-                provider: context.intentProvider,
+                provider: context.conversationProvider,
                 request: {
                   text,
                   locale: engine.getLesson().locale,
+                  nodeId: engine.getCurrentNode().id,
+                  mode: engine.getConversationMode(),
                   allowedIntents: engine.getCurrentNode().acceptedIntents,
+                  attempt: context.responseAttempt,
                 },
                 forceUnknown: context.forceUnknownIntent,
               };
             },
             onDone: {
-              target: "showingFeedback",
+              target: "routingInterpretation",
               actions: assign(({ context, event }) => {
                 const engine = requireEngine(context);
                 const intentResult = event.output;
+                if (
+                  intentResult.status === "understood" &&
+                  (intentResult.intent === "repeat_request" ||
+                    intentResult.intent === "slow_request")
+                ) {
+                  return {
+                    lastIntent: intentResult.intent,
+                    lastIntentResult: intentResult,
+                    lastResolution: null,
+                    lastRecoveryKind: null,
+                    feedback: null,
+                    nextAction: "speak" as const,
+                    slowMode: intentResult.intent === "slow_request",
+                    responseAttempt: context.responseAttempt + 1,
+                    forceUnknownIntent: false,
+                  };
+                }
+
+                if (intentResult.status !== "understood") {
+                  const recoveryKind = intentResult.status as RecoveryKind;
+                  const resolution = engine.resolveIntent(intentResult.intent);
+                  const line = engine.selectRecoveryLine(recoveryKind);
+                  return {
+                    lastIntent: intentResult.intent,
+                    lastIntentResult: intentResult,
+                    lastResolution: resolution,
+                    lastRecoveryKind: recoveryKind,
+                    currentLine: line,
+                    feedback: intentResult.status,
+                    nextAction: "speak" as const,
+                    slowMode: false,
+                    responseAttempt: context.responseAttempt + 1,
+                    forceUnknownIntent: false,
+                  };
+                }
+
                 const resolution = engine.resolveIntent(
-                  intentResult.understood ? intentResult.intent : "unknown",
+                  intentResult.intent,
                 );
+                const dimensions = applyConversationDimensions(
+                  context.powerDimensions,
+                  resolution.reward,
+                  resolution.helpUsage.highestLevel > 0,
+                );
+
+                if (resolution.status === "retry") {
+                  return {
+                    lastIntent: intentResult.intent,
+                    lastIntentResult: intentResult,
+                    lastResolution: resolution,
+                    lastRecoveryKind: null,
+                    currentLine: engine.getCurrentLine(),
+                    feedback: null,
+                    nextAction: "speak" as const,
+                    slowMode: false,
+                    responseAttempt: context.responseAttempt + 1,
+                    forceUnknownIntent: false,
+                  };
+                }
+
                 return {
                   lastIntent: intentResult.intent,
                   lastIntentResult: intentResult,
                   lastResolution: resolution,
+                  lastRecoveryKind: null,
                   feedback:
                     resolution.status === "advanced"
                       ? ("understood" as const)
-                      : ("not-understood" as const),
+                      : ("unclear" as const),
                   power: applyPowerReward(context.power, resolution.reward),
+                  powerDimensions: dimensions,
+                  nextAction:
+                    resolution.status === "advanced"
+                      ? ("feedback" as const)
+                      : ("speak" as const),
+                  responseAttempt:
+                    resolution.status === "advanced"
+                      ? context.responseAttempt
+                      : context.responseAttempt + 1,
                   forceUnknownIntent: false,
                 };
               }),
@@ -549,6 +754,12 @@ export const conversationMachine = setup({
               })),
             },
           },
+        },
+        routingInterpretation: {
+          always: [
+            { guard: "nextActionIsSpeech", target: "npcSpeaking" },
+            { target: "showingFeedback" },
+          ],
         },
         showingFeedback: {
           after: {
@@ -597,9 +808,7 @@ export const conversationMachine = setup({
             },
           },
         },
-        pronunciationAssessment: {
-          on: { PRONUNCIATION_READY: "waitingForUser" },
-        },
+        pronunciationAssessment: {},
       },
     },
     paused: {

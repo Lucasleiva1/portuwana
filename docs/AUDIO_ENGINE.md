@@ -2,13 +2,13 @@
 
 ## Alcance
 
-La Parte 4 activa micrófono y VAD reales en Windows; la Parte 5 conecta su salida
-a Whisper local. No evalúa pronunciación y no transmite ni conserva audio.
+La Parte 4 activa micrófono y VAD reales en Windows; la Parte 8 conecta su salida
+a Faster-Whisper persistente. No evalúa pronunciación y no transmite ni conserva audio.
 `Escrever` continúa pasando directamente al mismo `IntentProvider` y
 `LessonEngine`.
 
 ```text
-Falar → micrófono → Silero VAD → PCM → WAV 16 kHz → whisper.cpp → texto
+Falar → micrófono → Silero VAD → PCM → WAV 16 kHz → Faster-Whisper → texto
 Escrever ────────────────────────────────────────────────→ texto
 texto → IntentProvider → LessonEngine
 ```
@@ -61,10 +61,12 @@ enumerar y elige `default` si la preferencia desapareció.
 - `ort-wasm-simd-threaded.mjs`;
 - `ort-wasm-simd-threaded.wasm`.
 
-Los eventos son inicio, fin, misfire y frame procesado. Los valores iniciales
+Los eventos son inicio, fin, misfire y frame procesado. Parte 8 configura 600 ms
+de silencio final, 250 ms de pre-roll y 180 ms mínimos de voz. Los timeouts
 centralizados son 8 segundos para esperar voz y 20 segundos como duración
 máxima. Un misfire corto no cierra la escucha; un timeout sí cancela de forma
-segura y no genera audio vacío.
+segura y no genera audio vacío. El VAD de Faster-Whisper está desactivado para
+no encadenar dos detectores.
 
 ## Captura y WAV
 
@@ -119,7 +121,7 @@ escritura o cerrar:
 - se aborta playback;
 - se remueve `devicechange`;
 - se cierra el `AudioContext`.
-- se cancela el proceso Whisper activo y se elimina su WAV temporal.
+- se cancela el worker Faster-Whisper activo y se elimina su WAV temporal.
 
 ## Errores y privacidad
 

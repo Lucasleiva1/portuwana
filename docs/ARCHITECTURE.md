@@ -25,6 +25,22 @@ Rust ejecuta el CLI desde una ruta fija con modelo multilingüe `base` o `small`
 idioma `pt` y traducción desactivada. La interfaz conserva `Escrever` como vía
 equivalente y recuperación segura.
 
+La Parte 6 amplía la conversación sin convertirla en chat libre generativo.
+`ConversationProvider` interpreta el turno y `LessonEngine` conserva el control
+de objetivos y transiciones. El contenido registra variantes y recuperaciones
+por línea. Voz y pronunciación permanecen como providers intercambiables; la
+evaluación de pronunciación se ejecuta en paralelo y nunca bloquea el diálogo.
+
+La Parte 7 agrega persistencia local de progreso, sesiones y preferencias. Un
+servicio de diccionario aislado importa fuentes léxicas comprimidas, construye
+un índice SQLite bidireccional y permite consultas contextuales sin enviar
+eventos a `LessonEngine`. El asistente reutiliza el audio y Whisper locales para
+dictado ES/PT.
+
+La Parte 8 convierte Faster-Whisper 1.2.1 + CTranslate2 4.7.2 en STT principal.
+Un worker Python empaquetado se mantiene caliente, prefiere CUDA y cae a CPU;
+whisper.cpp queda como fallback técnico secuencial y no se carga en paralelo.
+
 ## Capas
 
 ```text
@@ -33,24 +49,29 @@ src/
   components/           Componentes React de interfaz técnica
   scene/                 Escena PixiJS, fondo, resolver de assets y CharacterRig
   lesson/                Schemas, contenido, ayuda, scoring y LessonEngine
-  conversation/          Contrato de intents y provider local
+  conversation/          Provider conversacional, intents y análisis local
   state/                 Máquina XState y contexto de conversación
   audio/                 Permisos, dispositivos, VAD, captura, WAV y sesión
   speech/
     providers/           Interfaces STT, TTS y pronunciación
-    playback/            Resolución y reproducción de voz NPC
+    playback/            Resolución, caché y reproducción de voz NPC
+    pronunciation/       Feedback pedagógico y contribución no negativa
     voice/               Configuración de la voz de cada personaje
-    whisper/             Provider, configuración y modelos de Whisper local
+    faster-whisper/      Provider principal y estado del worker persistente
+    whisper/             Fallback temporal whisper.cpp
     azure/               Providers Azure controlados
   schemas/               Validación Zod de entradas futuras
   storage/               Inicialización SQLite
+  dictionary/            Servicio, normalización, léxico esencial e importador DEV
   logging/               Logger único y eventos técnicos
   mocks/                 STT y pronunciación controlados para desarrollo/tests
 
 src-tauri/
+  binaries/faster-whisper/ Worker empaquetado con CUDA/CPU (ignorado por Git)
   binaries/whisper/      Runtime whisper.cpp Windows x64 (ignorado por Git)
   resources/models/      Modelos multilingües base/small (ignorados por Git)
-  src/whisper.rs         Servicio nativo tipado, timeout y cleanup
+  src/faster_whisper.rs  Worker persistente, fallback CUDA/CPU y cleanup
+  src/whisper.rs         Fallback temporal tipado
   migrations/            Migraciones SQLite versionadas
   capabilities/          Permisos mínimos Tauri
 
@@ -63,7 +84,7 @@ public/
 ## Arranque
 
 1. React registra `app.start` y prepara infraestructura.
-2. Tauri precarga `sqlite:portuwana.db` y aplica la migración 1.
+2. Tauri precarga `sqlite:portuwana.db` y aplica las migraciones 1 y 2.
 3. `database.ts` abre la conexión, consulta `schema.version` y registra
    `database.ready`.
 4. `AirportScene` inicializa PixiJS 8 de forma asíncrona, resuelve el contrato de
@@ -73,7 +94,8 @@ public/
 6. XState entra en `loadingLesson`; Zod valida `airport-arrival-01` y crea
    `LessonEngine`.
 7. `AudioEngine` observa dispositivos sin pedir permiso todavía.
-8. React consulta `whisper_status` sin descargar recursos y muestra su estado.
+8. React consulta `faster_whisper_status`; Tauri inicia una vez el worker y
+   muestra backend, modelo, GPU y estado sin descargar recursos.
 9. La escena registra `scene.ready`; cuando Tauri, PixiJS, audio y SQLite están
    listos, React registra `app.ready`.
 
@@ -81,25 +103,30 @@ public/
 
 `conversationMachine` controla carga, habla NPC, permiso, escucha, grabación,
 procesamiento de audio, transcripción local, escritura, análisis de intención,
-feedback, transición de nodo, pausa, finalización y error. `transcribing` ya
-representa la frontera STT; `pronunciationAssessment` continúa reservado. La UI
+feedback, transición de nodo, pausa, finalización y error. `transcribing`
+representa la frontera STT y los eventos de pronunciación son asíncronos. La UI
 no decide el siguiente nodo ni calcula puntos.
 
-`LocalIntentProvider` recibe sólo los intents aceptados por el nodo actual. El
-resultado entra a `LessonEngine`, que resuelve transición, fallback, ayuda y
-recompensa. El detalle se documenta en `LESSON_ENGINE.md`.
+`LocalGuidedConversationProvider` añade controles globales de repetición y modo
+lento y delega el análisis lingüístico a `LocalIntentProvider`. El resultado
+distingue entendido, coincidencia parcial, ambiguo, fuera de tema y poco claro.
+Sólo `LessonEngine` resuelve transición, fallback, ayuda y recompensa. Un
+provider externo o de IA futuro deberá respetar el mismo resultado estructurado.
 
 ## Providers
 
 Las interfaces `STTProvider`, `TTSProvider` y `PronunciationProvider` reciben
-tipos explícitos sin `any`. `WhisperProvider` está activo cuando el runtime y el
-modelo elegido existen; `AzureTTSProvider` y `AzurePronunciationProvider`
+tipos explícitos sin `any`. `PortuwanaSTTProvider` usa Faster-Whisper y sólo
+invoca `WhisperProvider` si el principal no está disponible;
+`AzureTTSProvider` y `AzurePronunciationProvider`
 continúan devolviendo `notConfigured` sin credenciales. No se leen variables de
 entorno, no se guardan credenciales y no se descarga ningún modelo Whisper.
 
 El paquete de Azure Speech queda instalado para la integración futura, sin
 credenciales. `NpcSpeechService` prioriza asset local, luego un `TTSProvider`
 configurado y finalmente texto. `LocalVoiceProvider` no se confunde con TTS.
+`NpcSpeechService` cachea audio TTS por línea y velocidad para que la repetición
+no vuelva a sintetizar.
 Los detalles están en `AUDIO_ENGINE.md` y `NPC_VOICE.md`.
 
 `@ricky0123/vad-web` ejecuta Silero VAD v5 completamente local con el modelo,
@@ -108,12 +135,15 @@ duplica `LessonEngine`: audio → Whisper → texto → intent → lección.
 
 ## Persistencia y seguridad
 
-La única tabla de esta fase es `technical_status`, creada por una migración Rust.
-El frontend recibe `sql:default`, suficiente para cargar y consultar la base; no
-recibe permiso de escritura SQL. El plugin shell está registrado, pero ninguna
-orden shell queda expuesta al frontend. Logging tiene únicamente `log:default`.
+La migración 1 conserva `technical_status`; la migración 2 agrega perfil,
+progreso, sesiones, settings, historial, favoritos y el modelo léxico con
+trazabilidad. El frontend recibe `sql:default` y `sql:allow-execute` para esos
+servicios locales tipados. El constructor pesado y el acceso a fuentes externas
+permanecen en comandos Rust acotados: React no puede ejecutar SQL arbitrario
+fuera de la base precargada ni elegir ejecutables. El plugin shell está
+registrado, pero ninguna orden shell queda expuesta al frontend.
 
-El PCM y el WAV del usuario viven en memoria hasta invocar Whisper. Rust escribe
+El PCM y el WAV del usuario viven en memoria hasta invocar Faster-Whisper. Rust escribe
 el WAV en una carpeta temporal exclusiva y la elimina al terminar, cancelar o
 fallar. No se envía audio a internet. Los logs registran metadatos técnicos, no
 audio ni transcript. React no puede elegir ejecutables, modelos por ruta ni

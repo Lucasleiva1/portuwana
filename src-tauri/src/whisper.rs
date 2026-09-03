@@ -226,10 +226,10 @@ fn validate_request(
             "Identificador de transcrição inválido.",
         ));
     }
-    if request.language != "pt" || request.translate {
+    if !matches!(request.language.as_str(), "pt" | "es" | "auto") || request.translate {
         return Err(WhisperCommandError::new(
             "invalid-config",
-            "PORTUWANA requer transcrição em português sem tradução.",
+            "PORTUWANA requer transcrição em português, espanhol ou detecção automática, sem tradução.",
         ));
     }
     if !(1_000..=120_000).contains(&request.timeout_ms) {
@@ -417,7 +417,7 @@ fn transcribe_blocking(
         .arg("-f")
         .arg(artifacts.audio_path())
         .arg("-l")
-        .arg("pt")
+        .arg(&request.language)
         .arg("-oj")
         .arg("-of")
         .arg(artifacts.output_base())
@@ -614,7 +614,7 @@ mod tests {
     #[test]
     fn rejects_invalid_config_and_wav() {
         let mut invalid_config = request(valid_wav(1_000));
-        invalid_config.language = "auto".to_owned();
+        invalid_config.language = "en".to_owned();
         assert_eq!(
             validate_request(&invalid_config).unwrap_err().code,
             "invalid-config"
@@ -654,7 +654,12 @@ mod tests {
             .as_nanos();
         let root = std::env::temp_dir().join(format!("portuwana-missing-{unique}"));
         fs::create_dir(&root).unwrap();
-        assert!(fixed_asset(&[root.clone()], Path::new("models"), "missing.bin").is_none());
+        assert!(fixed_asset(
+            std::slice::from_ref(&root),
+            Path::new("models"),
+            "missing.bin"
+        )
+        .is_none());
         fs::remove_dir(root).unwrap();
     }
 

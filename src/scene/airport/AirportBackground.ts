@@ -70,6 +70,9 @@ export class AirportBackground {
       const optionalStates: readonly AirportAssetKey[] = [
         "backgroundStateB",
         "backgroundStateC",
+        "backgroundStateD",
+        "backgroundStateE",
+        "backgroundStateF",
       ];
       for (const key of optionalStates) {
         if (!availability[key]) {

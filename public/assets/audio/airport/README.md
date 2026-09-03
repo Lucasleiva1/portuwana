@@ -3,17 +3,14 @@
 Adicione aqui os arquivos WAV definitivos da personagem. Eles não são gerados,
 baixados nem versionados automaticamente pela aplicação.
 
-Nomes previstos:
+Use o ID da linha definido em
+`src/lesson/lessons/airport-arrival/lines.ts` como nome estável:
 
-- `01-welcome.wav`
-- `02-baggage.wav`
-- `03-baggage-area.wav`
-- `04-location.wav`
-- `05-direction.wav`
-- `06-confirmation.wav`
-- `07-goodbye.wav`
+- `<line-id>.wav` para a versão normal;
+- `<line-id>-slow.wav` para a versão lenta opcional.
 
-Cada nó aceita `audioAsset` e `slowAudioAsset`. Enquanto esses campos não
-apontarem para um arquivo existente, PORTUWANA permanece em modo texto sem
-interromper a lição. Use WAV mono ou estéreo comum; a voz da NPC é apenas
-reproduzida e não se mistura com a captura do usuário.
+As rotas são registradas uma única vez no catálogo de linhas, nunca nos
+componentes. Enquanto `audioAsset` e `slowAudioAsset` não apontarem para um
+arquivo existente, PORTUWANA permanece em modo texto sem interromper a lição.
+Use WAV mono ou estéreo comum; a voz da NPC é apenas reproduzida e não se mistura
+com a captura do usuário.

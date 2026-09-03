@@ -57,6 +57,12 @@ describe("Whisper configuration", () => {
         ...defaultWhisperConfig,
         language: "auto",
       }).success,
+    ).toBe(true);
+    expect(
+      whisperConfigSchema.safeParse({
+        ...defaultWhisperConfig,
+        language: "en",
+      }).success,
     ).toBe(false);
   });
 
@@ -128,6 +134,31 @@ describe("WhisperProvider", () => {
       status: "error",
       code: "timeout",
       message: "Demorou demais.",
+    });
+  });
+
+  it("can override the language for Spanish dictionary dictation", async () => {
+    const { invoke } = readyInvoke((args) => {
+      const request = args?.request as Record<string, unknown>;
+      expect(request.language).toBe("es");
+      return {
+        text: "hombre",
+        language: "es",
+        durationMs: 100,
+        processingMs: 150,
+        provider: "whisper.cpp",
+        model: "base",
+        realTimeFactor: 1.5,
+      };
+    });
+    const provider = new WhisperProvider({ invoke, tauriAvailable: true });
+
+    await expect(
+      provider.transcribe(createSilentRecording(), { language: "es" }),
+    ).resolves.toMatchObject({
+      status: "success",
+      text: "hombre",
+      language: "es",
     });
   });
 

@@ -25,7 +25,10 @@ export function initializeDatabase(): Promise<DatabaseInitialization> {
     return databasePromise;
   }
 
-  databasePromise = initialize();
+  databasePromise = initialize().catch((error: unknown) => {
+    databasePromise = null;
+    throw error;
+  });
   return databasePromise;
 }
 

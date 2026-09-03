@@ -4,6 +4,12 @@ export const airportAssetPaths = {
     "/assets/airport/ambient/background-state-b-v1.png",
   backgroundStateC:
     "/assets/airport/ambient/background-state-c-v1.png",
+  backgroundStateD:
+    "/assets/airport/ambient/background-state-d-v1.png",
+  backgroundStateE:
+    "/assets/airport/ambient/background-state-e-v1.png",
+  backgroundStateF:
+    "/assets/airport/ambient/background-state-f-v1.png",
   ambientTravelerMan: "/assets/airport/ambient/ambient-traveler-man-v2.png",
   ambientTravelerWoman:
     "/assets/airport/ambient/ambient-traveler-woman-v2.png",

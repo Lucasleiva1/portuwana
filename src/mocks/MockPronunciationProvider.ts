@@ -1,13 +1,29 @@
-export interface MockPronunciationResult {
-  status: "mock";
-  message: string;
-}
+import type { PronunciationResult } from "../schemas";
+import type {
+  PronunciationProvider,
+  PronunciationRequest,
+  ProviderAvailability,
+} from "../speech/providers/types";
 
-export class MockPronunciationProvider {
-  async assess(): Promise<MockPronunciationResult> {
+export class MockPronunciationProvider implements PronunciationProvider {
+  readonly id = "mock-pronunciation";
+
+  getStatus(): ProviderAvailability {
+    return { status: "ready" };
+  }
+
+  async assess(request: PronunciationRequest): Promise<PronunciationResult> {
+    const words = request.transcript
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 6)
+      .map((word, index) => ({ word, accuracy: Math.max(68, 92 - index * 4) }));
     return {
-      status: "mock",
-      message: "A avaliação de pronúncia real será conectada em uma etapa futura.",
+      status: "success",
+      overallScore: 84,
+      fluencyScore: 82,
+      accuracyScore: 86,
+      words,
     };
   }
 }

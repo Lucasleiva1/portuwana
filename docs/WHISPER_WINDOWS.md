@@ -1,88 +1,113 @@
-# Whisper local en Windows
+# Faster-Whisper local en Windows
 
-## Versión y archivos
+## Runtime principal
 
-PORTUWANA fija `whisper.cpp` **1.9.3** (release `b4938`) para Windows x64. El
-runtime oficial se coloca en `src-tauri/binaries/whisper/` y los modelos en
-`src-tauri/resources/models/`. Ambos directorios se empaquetan como recursos de
-Tauri, pero sus binarios grandes quedan fuera de Git.
+Desde Fase 1 / Parte 8, PORTUWANA usa Faster-Whisper como STT principal. La
+combinación se tomó de WhisperSolution Premium y fue validada en el mismo
+equipo:
 
-El proyecto instalado y verificado usa:
+- Faster-Whisper 1.2.1;
+- CTranslate2 4.7.2;
+- Python 3.11.9 empaquetado, sin instalación manual para el usuario;
+- modelo multilingüe `small` de Systran;
+- CUDA con `int8_float32` cuando está disponible;
+- CPU con `int8` como degradación automática;
+- tarea `transcribe`: nunca se usa Faster-Whisper para traducir.
 
-- `whisper-bin-x64.zip`, SHA-256
-  `c2a4b60edb11f7e11a9191ffb50929535527d4d91c9903dbe3e554583bbbc63d`;
-- `ggml-base.bin`, SHA-1
-  `465707469ff3a37a2b9b8d8f89f2f99de7299dac`.
+El proceso persistente está en `src-tauri/binaries/faster-whisper/` y el modelo
+en `src-tauri/resources/models/faster-whisper-small/`. Tauri resuelve ambas
+rutas; React no puede elegir ejecutables ni modelos arbitrarios. El build se
+reproduce con `tools/faster-whisper-worker/build-worker.ps1` usando el entorno
+estable documentado en `requirements.txt`.
 
-El modelo `small` es opcional y debe llamarse `ggml-small.bin`. La aplicación no
-descarga ejecutables ni modelos al arrancar.
+El runtime incluido ocupa 1988,4 MiB y el modelo 463,7 MiB. La mayor parte del
+runtime son las DLL oficiales de cuBLAS y cuDNN necesarias para que CUDA no
+dependa de una instalación global. No se empaqueta el entorno de desarrollo.
 
-## Flujo
+## Flujo y ciclo de vida
 
 ```text
 Falar
-  → AudioEngine / Silero VAD
+  → AudioEngine / un único Silero VAD
   → WAV PCM 16-bit, mono, 16 kHz
-  → comando Tauri tipado
-  → whisper-cli -l pt (sin traducción)
+  → comando Tauri validado
+  → worker Faster-Whisper ya caliente
+  → CUDA; CPU si CUDA falla
   → transcript validado
   → LocalIntentProvider
   → LessonEngine
 ```
 
-React envía únicamente bytes WAV y configuración validada (`base|small`, `pt`,
-`translate=false`, timeout y threads). No envía comandos, argumentos libres ni
-rutas. Rust localiza el ejecutable y el modelo en ubicaciones fijas, crea una
-carpeta temporal única, ejecuta el proceso sin ventana y valida el JSON final.
+El worker se inicia una vez, carga el modelo una vez y atiende múltiples frases
+por NDJSON sobre stdin. No abre puertos ni ventanas y no requiere permisos de
+administrador. Rust limita audio y respuestas a una raíz temporal propia,
+serializa las solicitudes, reinicia el worker si cae y lo termina al cerrar la
+aplicación. Cancelar mata la inferencia activa; la siguiente solicitud crea un
+worker limpio.
 
-## Configuración
+La jerarquía de recuperación, siempre secuencial, es:
 
-La configuración inicial está en
-`src/speech/whisper/whisper.config.ts`:
+1. Faster-Whisper CUDA;
+2. Faster-Whisper CPU;
+3. whisper.cpp 1.9.3 temporal;
+4. `Escrever`.
 
-- modelo: `base`;
-- idioma: `pt`;
-- traducción: desactivada;
-- timeout: 45 segundos;
-- threads: 4.
+Whisper.cpp no se carga ni se ejecuta junto con Faster-Whisper. Se conserva sólo
+para la transición y puede retirarse en una fase posterior cuando la matriz de
+equipos finales esté validada.
 
-El timeout es deliberadamente 45 segundos: en el equipo de desarrollo, la carga
-fría del modelo base tardó aproximadamente 28 segundos aun con un WAV de un
-segundo. `small` necesita instalarse de forma explícita antes de elegirlo. En DEV
-el panel muestra versión, modelos disponibles, transcript y tiempos.
+## CUDA y modelo
 
-## Cancelación, errores y privacidad
+En el equipo de validación se detectó NVIDIA GeForce GTX 1050 Ti, driver 581.80,
+4096 MiB de VRAM y un dispositivo visible para CTranslate2. El paquete incorpora
+CUDA Runtime 12.9.79, cuBLAS 12.9.2.10 y cuDNN 9.22.0.52. El backend reportó
+realmente `cuda`, `int8_float32` y aproximadamente 1,1 GiB de VRAM en uso.
 
-Cada solicitud tiene un identificador seguro. Cancelar, pausar, reiniciar, pasar
-a `Escrever` o desmontar la aplicación solicita la terminación del proceso. El
-servicio también mata y espera el proceso al vencer el timeout. La salida de
-error se consume en paralelo para evitar bloqueos y la carpeta temporal se
-elimina mediante cleanup RAII tanto en éxito como en error.
+Se compararon `base` y `small` sobre el mismo WAV de 6,24 s y cinco pasadas
+CUDA. `base` fue más veloz (312 ms de inferencia caliente) pero degradó palabras
+y concordancia. `small` conservó la frase correctamente con 664 ms de promedio
+caliente, por lo que queda como modelo final.
 
-El WAV existe en disco sólo mientras `whisper-cli` lo procesa. No se conserva el
-audio, no se envía a internet y el texto reconocido no se escribe en logs. Los
-logs contienen sólo modelo, duraciones, RTF y códigos de error.
-
-Si faltan runtime o modelo, la lección sigue operativa y `Escrever` permanece
-disponible. Los errores esperables son `binary-missing`, `model-missing`,
-`invalid-wav`, `timeout`, `cancelled`, `empty-transcript` y `process-failed`.
-
-## Verificación
+El benchmark reproducible es:
 
 ```powershell
-npm run typecheck
-npm run test
-cargo test --manifest-path src-tauri/Cargo.toml
-npm run build
-npm run tauri dev
+.\tools\faster-whisper-worker\benchmark-worker.ps1 `
+  -Audio C:\ruta\frase.wav -Device cuda -Runs 5 -Language pt
 ```
 
-Para la prueba funcional final, pulsar `Falar`, decir una respuesta válida en
-portugués y comprobar que aparece `Você disse:`, que el intent avanza la lección
-y que no queda ninguna carpeta `portuwana-whisper-*` en `%TEMP%`.
+La misma prueba forzada a CPU produjo 7164 ms de inferencia caliente. El
+Whisper.cpp `base` anterior tardó 27808 ms de proceso completo para el mismo
+audio. Las cifras son del equipo indicado y no son garantías para otro hardware.
 
-Fuentes oficiales:
+## Audio, VAD y contexto
 
-- `https://github.com/ggml-org/whisper.cpp/releases/tag/b4938`;
-- `https://github.com/ggml-org/whisper.cpp/blob/master/models/README.md`;
-- `https://github.com/ggml-org/whisper.cpp/blob/master/examples/cli/README.md`.
+La captura pide un canal con `echoCancellation`, `noiseSuppression` y
+`autoGainControl`. Silero VAD v5 es el único responsable de cerrar el turno:
+600 ms de silencio, 250 ms de pre-roll y 180 ms mínimos de voz. El VAD interno
+de Faster-Whisper queda desactivado para no sumar una segunda espera.
+
+La escena aporta un prompt corto de vocabulario. Se conservan como máximo 200
+caracteres de contexto anterior y se limpia al reiniciar/cambiar el alcance de
+la lección. El contexto ayuda, pero `condition_on_previous_text` permanece
+desactivado para evitar propagación indefinida de errores.
+
+El panel DEV muestra dispositivo, nivel RMS, captura/VAD, backend, compute type,
+GPU, VRAM, carga, duración, inferencia, fin de voz a texto y fallback.
+
+## Privacidad y verificación
+
+El audio no sale del equipo. Cada WAV temporal se elimina en éxito, error o
+cancelación y el transcript no se escribe en logs. Los errores de silencio no
+se confunden con fallos de CUDA.
+
+```powershell
+npm run check
+cargo test --manifest-path src-tauri/Cargo.toml
+npm run tauri -- build --no-bundle
+npm run tauri -- dev
+```
+
+Para la prueba humana final, pulsar `Falar` y recorrer las frases pt-BR de
+`PHASE_1_PART_8.md`, verificando que el transcript avance la escena. La prueba
+humana de micrófono debe hacerse desde la ventana visible; no se graba al usuario
+automáticamente durante un benchmark.

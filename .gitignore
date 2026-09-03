@@ -15,8 +15,13 @@ dist-ssr
 # Local speech runtime (documented placeholders remain tracked)
 src-tauri/binaries/whisper/*
 !src-tauri/binaries/whisper/README.md
+src-tauri/binaries/faster-whisper/*
+!src-tauri/binaries/faster-whisper/README.md
 src-tauri/resources/models/*
 !src-tauri/resources/models/README.md
+!src-tauri/resources/models/faster-whisper-small/
+src-tauri/resources/models/faster-whisper-small/*
+!src-tauri/resources/models/faster-whisper-small/README.md
 
 # Editor directories and files
 .vscode/*

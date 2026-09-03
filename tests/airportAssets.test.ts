@@ -16,6 +16,15 @@ describe("airport asset contract", () => {
     expect(airportAssetPaths.backgroundStateC).toBe(
       "/assets/airport/ambient/background-state-c-v1.png",
     );
+    expect(airportAssetPaths.backgroundStateD).toBe(
+      "/assets/airport/ambient/background-state-d-v1.png",
+    );
+    expect(airportAssetPaths.backgroundStateE).toBe(
+      "/assets/airport/ambient/background-state-e-v1.png",
+    );
+    expect(airportAssetPaths.backgroundStateF).toBe(
+      "/assets/airport/ambient/background-state-f-v1.png",
+    );
     expect(airportAssetPaths.ambientTravelerMan).toBe(
       "/assets/airport/ambient/ambient-traveler-man-v2.png",
     );

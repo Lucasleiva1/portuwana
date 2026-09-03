@@ -1,5 +1,6 @@
 import type { PronunciationResult, TranscriptResult } from "../../schemas";
 import type { RecordedAudio } from "../../audio/audio.types";
+import type { ConversationMode } from "../../lesson/lesson.types";
 
 export interface AudioPayload {
   samples: Float32Array;
@@ -23,10 +24,24 @@ export interface TTSInput {
   rate?: number | undefined;
 }
 
+export interface PronunciationRequest {
+  audio: AudioPayload;
+  transcript: string;
+  locale: string;
+  mode: ConversationMode;
+  targetText?: string | undefined;
+}
+
+export interface STTOptions {
+  language?: "pt" | "es" | "auto" | undefined;
+  initialPrompt?: string | undefined;
+  contextScope?: string | undefined;
+}
+
 export interface STTProvider {
   readonly id: string;
   getStatus(): ProviderAvailability;
-  transcribe(audio: RecordedAudio): Promise<TranscriptResult>;
+  transcribe(audio: RecordedAudio, options?: STTOptions): Promise<TranscriptResult>;
 }
 
 export interface TTSProvider {
@@ -38,9 +53,5 @@ export interface TTSProvider {
 export interface PronunciationProvider {
   readonly id: string;
   getStatus(): ProviderAvailability;
-  assess(
-    audio: AudioPayload,
-    referenceText: string,
-    locale: string,
-  ): Promise<PronunciationResult>;
+  assess(request: PronunciationRequest): Promise<PronunciationResult>;
 }

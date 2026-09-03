@@ -80,12 +80,16 @@ en [CHARACTER_ASSET_METHOD.md](CHARACTER_ASSET_METHOD.md).
 ```text
 public/assets/airport/ambient/background-state-b-v1.png
 public/assets/airport/ambient/background-state-c-v1.png
+public/assets/airport/ambient/background-state-d-v1.png
+public/assets/airport/ambient/background-state-e-v1.png
+public/assets/airport/ambient/background-state-f-v1.png
 public/assets/airport/ambient/ambient-traveler-man-v2.png
 public/assets/airport/ambient/ambient-traveler-woman-v2.png
 ```
 
-El fondo original es el estado A inmutable. B y C cambian únicamente el avance y
-la distribución de pasajeros, y se conectan mediante una disolución lenta. Las
+El fondo original es el estado A inmutable. B a F cambian únicamente el avance y
+la distribución de pasajeros, y se conectan mediante una disolución lenta. D
+continúa el avance, E reduce la ocupación y F incorpora un grupo diferente. Las
 dos figuras v2 forman una segunda capa situada entre el fondo y el personaje.
 No caminan todavía: aparecen, permanecen quietas, desaparecen y cambian de zona
 sólo mientras su alfa es cero. Sus PNG tienen alfa real; las v1 con cuadrícula
@@ -163,7 +167,7 @@ respiración sutil.
 - [x] Estado abierto obtenido directamente del master, sin parche adicional.
 - [x] Bocas mid/open v2 derivadas del master y registradas en origen exacto.
 - [x] Expresiones v2 localizadas mantienen pose, cuerpo y proporciones.
-- [x] Ciclo de fondo A/B/C separado del rig principal.
+- [x] Ciclo de fondo A/B/C/D/E/F separado del rig principal.
 - [x] Pasajeros ambientales v2 con alfa real y zonas seguras verificadas.
 - [ ] Ningún panel DOM tapa el rostro en las resoluciones objetivo.
 - [x] Build y tests pasan con assets presentes y ausentes.

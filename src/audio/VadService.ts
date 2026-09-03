@@ -68,9 +68,9 @@ export class VadService implements VadController {
       processorType: "auto",
       positiveSpeechThreshold: 0.6,
       negativeSpeechThreshold: 0.42,
-      redemptionMs: 900,
-      preSpeechPadMs: 320,
-      minSpeechMs: 300,
+      redemptionMs: 600,
+      preSpeechPadMs: 250,
+      minSpeechMs: 180,
       submitUserSpeechOnPause: false,
       onFrameProcessed: (
         probabilities: SpeechProbabilities,

@@ -14,12 +14,13 @@ import {
   defaultWhisperConfig,
   whisperConfigSchema,
   type WhisperConfig,
+  type WhisperLanguage,
 } from "./whisper.config";
 import { WhisperModelManager } from "./WhisperModelManager";
 
 const nativeResponseSchema = z.object({
   text: z.string().trim().min(1),
-  language: z.literal("pt"),
+  language: z.enum(["pt", "es"]),
   durationMs: z.number().nonnegative(),
   processingMs: z.number().nonnegative(),
   provider: z.literal("whisper.cpp"),
@@ -155,7 +156,10 @@ export class WhisperProvider implements STTProvider {
     return this.#availability;
   }
 
-  async transcribe(audio: RecordedAudio): Promise<TranscriptResult> {
+  async transcribe(
+    audio: RecordedAudio,
+    overrides: { language?: WhisperLanguage } = {},
+  ): Promise<TranscriptResult> {
     if (
       audio.sampleRate !== 16_000 ||
       audio.durationMs <= 0 ||
@@ -179,7 +183,10 @@ export class WhisperProvider implements STTProvider {
       return notConfigured(code, availability.reason);
     }
 
-    const config = whisperConfigSchema.parse(this.#config);
+    const config = whisperConfigSchema.parse({
+      ...this.#config,
+      ...overrides,
+    });
     const currentRequestId = requestId();
     this.#activeRequestId = currentRequestId;
     void logger.info("stt.whisper.start", {

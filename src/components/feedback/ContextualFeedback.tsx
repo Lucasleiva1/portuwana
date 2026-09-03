@@ -1,4 +1,10 @@
-export type FeedbackState = "understood" | "not-understood" | null;
+export type FeedbackState =
+  | "understood"
+  | "partial_match"
+  | "ambiguous"
+  | "off_topic"
+  | "unclear"
+  | null;
 
 interface ContextualFeedbackProps {
   state: FeedbackState;
@@ -26,9 +32,16 @@ export function ContextualFeedback({
     );
   }
 
+  const messages: Readonly<Record<Exclude<FeedbackState, "understood" | null>, string>> = {
+    partial_match: "Entendi uma parte da resposta.",
+    ambiguous: "Sua resposta pode ter dois sentidos.",
+    off_topic: "Vamos voltar ao objetivo desta conversa.",
+    unclear: "Não consegui entender bem.",
+  };
+
   return (
     <section className="contextual-feedback contextual-feedback--retry" role="alert">
-      <strong>Não consegui entender bem.</strong>
+      <strong>{messages[state]}</strong>
       <div>
         <button type="button" onClick={onRetry}>
           Tentar novamente

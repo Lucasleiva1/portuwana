@@ -21,7 +21,8 @@ export function TranscriptPreview({
       <q>{transcript.text}</q>
       {showProcessingTime && (
         <small>
-          Áudio {(transcript.durationMs / 1_000).toFixed(1)}s · Whisper{" "}
+          Áudio {(transcript.durationMs / 1_000).toFixed(1)}s · {transcript.provider}
+          {transcript.backend ? ` ${transcript.backend}` : ""}{" "}
           {(transcript.processingMs / 1_000).toFixed(1)}s · RTF{" "}
           {transcript.realTimeFactor.toFixed(2)}
         </small>
